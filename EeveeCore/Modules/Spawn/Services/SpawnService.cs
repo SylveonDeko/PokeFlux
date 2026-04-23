@@ -1735,6 +1735,12 @@ public class SpawnService : INService, IReadyExecutor
     /// <returns>An embed with information about the update.</returns>
     public async Task<Embed> UpdateRedirectChannel(ulong guildId, ulong channelId, bool add)
     {
+        // Ensure redirects field is initialized as an array if null
+        await _mongoDb.Guilds.UpdateOneAsync(
+            g => g.GuildId == guildId && g.Redirects == null,
+            Builders<Guild>.Update.Set(g => g.Redirects, new List<ulong>()),
+            new UpdateOptions { IsUpsert = false });
+
         var update = add
             ? Builders<Guild>.Update.AddToSet(g => g.Redirects, channelId)
             : Builders<Guild>.Update.Pull(g => g.Redirects, channelId);
