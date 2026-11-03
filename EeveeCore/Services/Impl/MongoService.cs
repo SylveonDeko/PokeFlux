@@ -13,12 +13,14 @@ namespace EeveeCore.Services.Impl;
 ///     Provides access to MongoDB collections used throughout the application.
 /// </summary>
 /// <param name="client">The MongoDB client used to access the database.</param>
-public class MongoService(IMongoClient client) : IMongoService
+/// <param name="credentials">The bot credentials, whose Mongo connection string may name the database.</param>
+public class MongoService(IMongoClient client, BotCredentials credentials) : IMongoService
 {
     /// <summary>
-    ///     The MongoDB database containing all collections.
+    ///     The MongoDB database containing all collections: the one named in the connection string, or pokemon.
     /// </summary>
-    private readonly IMongoDatabase _database = client.GetDatabase("pokemon");
+    private readonly IMongoDatabase _database =
+        client.GetDatabase(MongoUrl.Create(credentials.MongoConfig.ConnectionString).DatabaseName ?? "pokemon");
 
     // Pokemon Data
     /// <inheritdoc />
