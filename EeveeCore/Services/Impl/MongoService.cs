@@ -3,6 +3,8 @@ using EeveeCore.Database.Models.Mongo.Game;
 using EeveeCore.Database.Models.Mongo.Pokemon;
 using MongoDB.Driver;
 using Pokemon_Type = EeveeCore.Database.Models.Mongo.Pokemon.Type;
+using Guild = EeveeCore.Database.Models.Mongo.Discord.Guild;
+using User = EeveeCore.Database.Models.Mongo.Discord.User;
 
 namespace EeveeCore.Services.Impl;
 

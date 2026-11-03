@@ -68,7 +68,7 @@ public class FormsService(
 
             // Check for mega evolution redirect
             if (formName.Contains("mega"))
-                return (false, "Use `/pokemon forms mega evolve` for mega evolutions.");
+                return (false, "Use `/pokemon forms mega` for mega evolutions.");
 
             await using var db = await dbProvider.GetConnectionAsync();
             

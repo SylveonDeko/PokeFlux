@@ -3,6 +3,7 @@ using EeveeCore.Database.Linq.Models.Pokemon;
 using EeveeCore.Modules.Spawn.Services;
 using LinqToDB;
 using LinqToDB.Async;
+using User = EeveeCore.Database.Linq.Models.Bot.User;
 
 namespace EeveeCore.Modules.Start.Services;
 
@@ -11,14 +12,34 @@ namespace EeveeCore.Modules.Start.Services;
 ///     Handles the initial setup process for new users.
 /// </summary>
 /// <param name="dbContext">The database context for data access.</param>
-/// <param name="client">The Discord client for messaging.</param>
+/// <param name="botLog">The bot event log.</param>
 /// <param name="svc">The spawn service for creating Pokémon.</param>
-public class StartService(LinqToDbConnectionProvider dbContext, DiscordShardedClient client, SpawnService svc) : INService
+public class StartService(LinqToDbConnectionProvider dbContext, BotLog botLog, SpawnService svc) : INService
 {
+    /// <summary>
+    ///     The starters players can pick from, by type.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string[]> Starters = new Dictionary<string, string[]>
+    {
+        ["grass"] =
+            ["Bulbasaur", "Chikorita", "Treecko", "Turtwig", "Snivy", "Chespin", "Rowlet", "Grookey", "Sprigatito"],
+        ["water"] = ["Squirtle", "Totodile", "Mudkip", "Piplup", "Oshawott", "Froakie", "Popplio", "Sobble", "Quaxly"],
+        ["fire"] =
+            ["Charmander", "Cyndaquil", "Torchic", "Chimchar", "Tepig", "Fennekin", "Litten", "Scorbunny", "Fuecoco"]
+    };
+
+    /// <summary>
+    ///     Finds a starter by name, ignoring case.
+    /// </summary>
+    /// <param name="name">The name to look up.</param>
+    /// <returns>The starter's name as stored, or null when it is not a starter.</returns>
+    public static string? FindStarter(string name) =>
+        Starters.Values.SelectMany(s => s).FirstOrDefault(s => s.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
+
     /// <summary>
     ///     Handles creating a new user account
     /// </summary>
-    /// <param name="userId">The Discord ID of the user to register.</param>
+    /// <param name="userId">The ID of the user to register.</param>
     /// <returns>A tuple containing a success indicator and a message.</returns>
     public async Task<(bool Success, string Message)> RegisterNewUser(ulong userId)
     {
@@ -74,7 +95,7 @@ public class StartService(LinqToDbConnectionProvider dbContext, DiscordShardedCl
     /// <summary>
     ///     Creates a starter Pokémon for a user
     /// </summary>
-    /// <param name="userId">The Discord ID of the user.</param>
+    /// <param name="userId">The ID of the user.</param>
     /// <param name="starterName">The name of the selected starter Pokémon.</param>
     /// <returns>A tuple containing a success indicator and a message.</returns>
     public async Task<(bool Success, string Message)> CreateStarterPokemon(ulong userId, string? starterName)
@@ -87,111 +108,9 @@ public class StartService(LinqToDbConnectionProvider dbContext, DiscordShardedCl
         }
         catch (Exception ex)
         {
-            // Log error to channel
-            if (client.GetChannel(1351696540065857597) is IMessageChannel errorChannel)
-                await errorChannel.SendMessageAsync($"{userId} failed to create starter: {ex.Message}");
+            await botLog.SendAsync($"{userId} failed to create starter: {ex.Message}");
 
             return (false, "Failed to create starter Pokémon. Please try again.");
         }
-    }
-
-    /// <summary>
-    ///     Gets grass starter options
-    /// </summary>
-    /// <returns>A list of select menu options for grass-type starters.</returns>
-    public List<SelectMenuOptionBuilder> GetGrassStarterOptions()
-    {
-        return
-        [
-            new SelectMenuOptionBuilder().WithLabel("Bulbasaur").WithValue("Bulbasaur")
-                .WithDescription("Grass-type Starter").WithEmote(new Emoji("🍃")),
-            new SelectMenuOptionBuilder().WithLabel("Chikorita").WithValue("Chikorita")
-                .WithDescription("Grass-type Starter").WithEmote(new Emoji("🍃")),
-            new SelectMenuOptionBuilder().WithLabel("Treecko").WithValue("Treecko")
-                .WithDescription("Grass-type Starter")
-                .WithEmote(new Emoji("🍃")),
-            new SelectMenuOptionBuilder().WithLabel("Turtwig").WithValue("Turtwig")
-                .WithDescription("Grass-type Starter")
-                .WithEmote(new Emoji("🍃")),
-            new SelectMenuOptionBuilder().WithLabel("Snivy").WithValue("Snivy").WithDescription("Grass-type Starter")
-                .WithEmote(new Emoji("🍃")),
-            new SelectMenuOptionBuilder().WithLabel("Chespin").WithValue("Chespin")
-                .WithDescription("Grass-type Starter")
-                .WithEmote(new Emoji("🍃")),
-            new SelectMenuOptionBuilder().WithLabel("Rowlet").WithValue("Rowlet").WithDescription("Grass-type Starter")
-                .WithEmote(new Emoji("🍃")),
-            new SelectMenuOptionBuilder().WithLabel("Grookey").WithValue("Grookey")
-                .WithDescription("Grass-type Starter")
-                .WithEmote(new Emoji("🍃")),
-            new SelectMenuOptionBuilder().WithLabel("Sprigatito").WithValue("Sprigatito")
-                .WithDescription("Grass-type Starter").WithEmote(new Emoji("🍃"))
-        ];
-    }
-
-    /// <summary>
-    ///     Gets water starter options
-    /// </summary>
-    /// <returns>A list of select menu options for water-type starters.</returns>
-    public List<SelectMenuOptionBuilder> GetWaterStarterOptions()
-    {
-        return
-        [
-            new SelectMenuOptionBuilder().WithLabel("Squirtle").WithValue("Squirtle")
-                .WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧")),
-            new SelectMenuOptionBuilder().WithLabel("Totodile").WithValue("Totodile")
-                .WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧")),
-            new SelectMenuOptionBuilder().WithLabel("Mudkip").WithValue("Mudkip").WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧")),
-            new SelectMenuOptionBuilder().WithLabel("Piplup").WithValue("Piplup").WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧")),
-            new SelectMenuOptionBuilder().WithLabel("Oshawott").WithValue("Oshawott")
-                .WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧")),
-            new SelectMenuOptionBuilder().WithLabel("Froakie").WithValue("Froakie")
-                .WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧")),
-            new SelectMenuOptionBuilder().WithLabel("Popplio").WithValue("Popplio")
-                .WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧")),
-            new SelectMenuOptionBuilder().WithLabel("Sobble").WithValue("Sobble").WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧")),
-            new SelectMenuOptionBuilder().WithLabel("Quaxly").WithValue("Quaxly").WithDescription("Water-type Starter")
-                .WithEmote(new Emoji("💧"))
-        ];
-    }
-
-    /// <summary>
-    ///     Gets fire starter options
-    /// </summary>
-    /// <returns>A list of select menu options for fire-type starters.</returns>
-    public List<SelectMenuOptionBuilder> GetFireStarterOptions()
-    {
-        return
-        [
-            new SelectMenuOptionBuilder().WithLabel("Charmander").WithValue("Charmander")
-                .WithDescription("Fire-type Starter").WithEmote(new Emoji("🔥")),
-            new SelectMenuOptionBuilder().WithLabel("Cyndaquil").WithValue("Cyndaquil")
-                .WithDescription("Fire-type Starter")
-                .WithEmote(new Emoji("🔥")),
-            new SelectMenuOptionBuilder().WithLabel("Torchic").WithValue("Torchic").WithDescription("Fire-type Starter")
-                .WithEmote(new Emoji("🔥")),
-            new SelectMenuOptionBuilder().WithLabel("Chimchar").WithValue("Chimchar")
-                .WithDescription("Fire-type Starter")
-                .WithEmote(new Emoji("🔥")),
-            new SelectMenuOptionBuilder().WithLabel("Tepig").WithValue("Tepig").WithDescription("Fire-type Starter")
-                .WithEmote(new Emoji("🔥")),
-            new SelectMenuOptionBuilder().WithLabel("Fennekin").WithValue("Fennekin")
-                .WithDescription("Fire-type Starter")
-                .WithEmote(new Emoji("🔥")),
-            new SelectMenuOptionBuilder().WithLabel("Litten").WithValue("Litten").WithDescription("Fire-type Starter")
-                .WithEmote(new Emoji("🔥")),
-            new SelectMenuOptionBuilder().WithLabel("Scorbunny").WithValue("Scorbunny")
-                .WithDescription("Fire-type Starter")
-                .WithEmote(new Emoji("🔥")),
-            new SelectMenuOptionBuilder().WithLabel("Fuecoco").WithValue("Fuecoco").WithDescription("Fire-type Starter")
-                .WithEmote(new Emoji("🔥"))
-        ];
     }
 }

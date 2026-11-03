@@ -24,34 +24,33 @@ public class DuelRenderer(IMongoService mongoService) : INService
     /// </summary>
     /// <param name="battle">The Battle object containing the trainers and their parties.</param>
     /// <returns>
-    ///     A task representing the asynchronous operation that returns the sent Discord message.
+    ///     A task representing the asynchronous operation that returns the sent message.
     /// </returns>
-    public async Task GenerateTeamPreview(Battle battle)
+    /// <remarks>
+    ///     Players pick their lead by reacting with its number. Each trainer's event completes once they have.
+    /// </remarks>
+    public async Task<Message> GenerateTeamPreview(Battle battle)
     {
-        // Create embed for team preview
         var embed = new EmbedBuilder()
-            .WithTitle("Pokemon Battle accepted! Loading...")
+            .WithTitle("Pokemon Battle accepted!")
             .WithDescription("Team Preview")
             .WithColor(new Color(255, 182, 193))
-            .WithFooter("Who Wins!?");
+            .WithFooter("React or type the number of the Pokémon to lead with")
+            .WithImageUrl("attachment://team_preview.png");
 
-        // Generate preview image
+        foreach (var trainer in new[] { battle.Trainer1, battle.Trainer2 })
+            embed.AddField(trainer.Name, string.Join("\n", trainer.Party.Select((p, i) =>
+                $"{DuelReactions.Numbers[i]} {p.Name} | {p.Hp}hp")), true);
+
         using var previewImage = await GenerateTeamPreviewImage(battle);
-        using var memoryStream = new MemoryStream();
+        var memoryStream = new MemoryStream();
         previewImage.Encode(SKEncodedImageFormat.Png, 100).SaveTo(memoryStream);
         memoryStream.Position = 0;
 
-        // Create components for selecting lead Pokémon
-        var components = new ComponentBuilder()
-            .WithButton("Select a lead pokemon", "battle:select_lead")
-            .Build();
-
-        // Send the message
-        await battle.Channel.SendFileAsync(
-            memoryStream,
-            "team_preview.png",
-            embed: embed.Build(),
-            components: components);
+        var message = await battle.Channel.SendMessageAsync(embeds: [embed.Build()],
+            attachments: [new AttachmentRequest(memoryStream, "team_preview.png")]);
+        _ = battle.Reactions.PickLeadsAsync(battle, message);
+        return message;
     }
 
     /// <summary>

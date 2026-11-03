@@ -17,7 +17,7 @@ public class TradeService : INService
 {
     private readonly LinqToDbConnectionProvider _context;
     private readonly IDataCache _cache;
-    private readonly DiscordShardedClient _discordClient;
+    private readonly BotLog _botLog;
     private readonly ITradeLockService _tradeLockService;
     private readonly TradeEvolutionService _evolutionService;
     
@@ -26,21 +26,20 @@ public class TradeService : INService
     
     private const string TradeSessionPrefix = "trade_session:";
     private const int SessionTimeoutMinutes = 6;
-    private const ulong LogChannelId = 1004571710323957830;
 
     /// <summary>
     ///     Initializes a new instance of the <see cref="TradeService" /> class.
     /// </summary>
     /// <param name="context">The database context.</param>
     /// <param name="cache">The Redis cache service.</param>
-    /// <param name="discordClient">The Discord client.</param>
+    /// <param name="botLog">The bot event log.</param>
     /// <param name="tradeLockService">The trade lock service.</param>
     /// <param name="evolutionService">The trade evolution service.</param>
-    public TradeService(LinqToDbConnectionProvider context, IDataCache cache, DiscordShardedClient discordClient, ITradeLockService tradeLockService, TradeEvolutionService evolutionService)
+    public TradeService(LinqToDbConnectionProvider context, IDataCache cache, BotLog botLog, ITradeLockService tradeLockService, TradeEvolutionService evolutionService)
     {
         _context = context;
         _cache = cache;
-        _discordClient = discordClient;
+        _botLog = botLog;
         _tradeLockService = tradeLockService;
         _evolutionService = evolutionService;
     }
@@ -289,6 +288,67 @@ public class TradeService : INService
     }
 
     /// <summary>
+    ///     Removes tokens a user offered from a trade session.
+    /// </summary>
+    /// <param name="sessionId">The trade session ID.</param>
+    /// <param name="userId">The user removing tokens.</param>
+    /// <param name="tokenType">The type of tokens to remove.</param>
+    /// <param name="count">The number of tokens to remove.</param>
+    /// <returns>A TradeResult indicating success or failure.</returns>
+    public async Task<TradeResult> RemoveTokensFromTradeAsync(Guid sessionId, ulong userId, TokenType tokenType, int count)
+    {
+        var session = await GetTradeSessionAsync(sessionId);
+        if (session == null)
+        {
+            return TradeResult.Failure("Trade session not found.");
+        }
+
+        if (count <= 0)
+        {
+            return TradeResult.Failure("Invalid token count, please enter a positive number.");
+        }
+
+        if (!session.GetTokensBy(userId).TryGetValue(tokenType, out var currentAmount) || currentAmount < count)
+        {
+            return TradeResult.Failure($"You don't have {count} {tokenType.GetDisplayName()} tokens in this trade!");
+        }
+
+        var remaining = count;
+        foreach (var entry in session.GetEntriesBy(userId)
+                     .Where(e => e.ItemType == TradeItemType.Tokens && e.TokenType == tokenType)
+                     .ToList())
+        {
+            if (remaining <= 0) break;
+
+            if (entry.TokenCount <= remaining)
+            {
+                remaining -= entry.TokenCount;
+                session.RemoveEntry(entry.Id);
+            }
+            else
+            {
+                entry.TokenCount -= remaining;
+                remaining = 0;
+            }
+        }
+
+        await UpdateSessionInRedisAsync(session);
+
+        return TradeResult.FromSuccess($"Removed {count} {tokenType.GetDisplayName()} tokens from the trade.");
+    }
+
+    /// <summary>
+    ///     Gets the trade session a user is currently taking part in.
+    /// </summary>
+    /// <param name="userId">The user ID.</param>
+    /// <returns>The active session, or null when the user is not trading.</returns>
+    public TradeSession? GetActiveSessionForUser(ulong userId)
+    {
+        return _activeSessions.Values.FirstOrDefault(s => s.IsParticipant(userId) &&
+            s.Status is TradeStatus.Active or TradeStatus.PendingConfirmation or TradeStatus.Processing);
+    }
+
+    /// <summary>
     ///     Removes a Pokemon from a trade session by trade entry index.
     /// </summary>
     /// <param name="sessionId">The trade session ID.</param>
@@ -394,9 +454,6 @@ public class TradeService : INService
 
             // Log the trade
             await LogTradeAsync(session);
-
-            // Send completion notifications
-            await NotifyTradeCompletionAsync(session, pokemonEvolutions);
 
             return TradeResult.FromSuccess("Trade completed successfully!");
         }
@@ -549,33 +606,25 @@ public class TradeService : INService
         }
 
         var tradeSummary = await GenerateTradeSummaryAsync(session);
-        
+
         var embed = new EmbedBuilder()
             .WithTitle("🔄 Active Trade Session")
             .WithDescription(tradeSummary)
             .WithColor(Color.Blue)
+            .AddField("Confirmed",
+                $"{(session.Player1Confirmed ? "✅" : "⬜")} <@{session.Player1Id}>\n" +
+                $"{(session.Player2Confirmed ? "✅" : "⬜")} <@{session.Player2Id}>")
+            .AddField("Commands",
+                "`trade add <ids>` · `trade remove <ids>` · `trade credits <amount>`\n" +
+                "`trade tokens <type> <amount>` · `trade untokens <type> <amount>`\n" +
+                (session.HasItems() ? "`trade confirm` · " : "") + "`trade cancel`")
             .WithFooter($"Session ID: {session.SessionId}")
             .WithTimestamp(DateTimeOffset.UtcNow)
             .Build();
 
-        var components = new ComponentBuilder()
-            .WithButton("Add Pokemon", $"trade_add_pokemon:{session.SessionId}", ButtonStyle.Secondary, new Emoji("🎯"))
-            .WithButton("Remove Pokemon", $"trade_remove_pokemon:{session.SessionId}", ButtonStyle.Secondary, new Emoji("🗑️"))
-            .WithButton("Add Credits", $"trade_add_credits:{session.SessionId}", ButtonStyle.Secondary, new Emoji("💰"))
-            .WithButton("Add Tokens", $"trade_add_tokens:{session.SessionId}", ButtonStyle.Secondary, new Emoji("🎫"))
-            .WithButton("Remove Tokens", $"trade_remove_tokens:{session.SessionId}", ButtonStyle.Secondary, new Emoji("🎪"))
-            .WithButton("Confirm Trade", $"trade_confirm:{session.SessionId}", ButtonStyle.Success, new Emoji("✅"), 
-                row: 1, disabled: !session.HasItems())
-            .WithButton("Cancel Trade", $"trade_cancel:{session.SessionId}", ButtonStyle.Danger, new Emoji("❌"), row: 1)
-            .Build();
-
         try
         {
-            await session.TradeMessage.ModifyAsync(x =>
-            {
-                x.Embed = embed;
-                x.Components = components;
-            });
+            await session.TradeMessage.ModifyAsync(embeds: [embed]);
         }
         catch
         {
@@ -656,16 +705,9 @@ public class TradeService : INService
             .WithTimestamp(DateTimeOffset.UtcNow)
             .Build();
 
-        // Remove all buttons - trade is cancelled
-        var components = new ComponentBuilder().Build();
-
         try
         {
-            await session.TradeMessage.ModifyAsync(x =>
-            {
-                x.Embed = embed;
-                x.Components = components;
-            });
+            await session.TradeMessage.ModifyAsync(embeds: [embed]);
         }
         catch
         {
@@ -720,10 +762,10 @@ public class TradeService : INService
     }
 
     /// <summary>
-    ///     Gets a Pokemon by user ID and position in their collection.
+    ///     Gets a Pokemon by user ID and the number it shows as in their list.
     /// </summary>
     /// <param name="userId">The user ID.</param>
-    /// <param name="position">The position in the collection.</param>
+    /// <param name="position">The 1-based number in the collection.</param>
     /// <returns>The Pokemon at the specified position, or null if not found.</returns>
     public async Task<Database.Linq.Models.Pokemon.Pokemon?> GetPokemonByPosition(ulong userId, ulong position)
     {
@@ -733,9 +775,9 @@ public class TradeService : INService
         }
 
         await using var db = await _context.GetConnectionAsync();
-        
+
         var ownership = await db.UserPokemonOwnerships
-            .FirstOrDefaultAsync(o => o.UserId == userId && o.Position == position);
+            .FirstOrDefaultAsync(o => o.UserId == userId && o.Position == position - 1);
 
         if (ownership == null)
         {
@@ -820,6 +862,7 @@ public class TradeService : INService
     public async Task UpdateSessionInRedisAsync(TradeSession session)
     {
         session.LastUpdated = DateTime.UtcNow;
+        session.ExpiresAt = DateTime.UtcNow.AddMinutes(SessionTimeoutMinutes);
         await StoreSessionInRedisAsync(session);
     }
 
@@ -994,45 +1037,18 @@ public class TradeService : INService
     {
         try
         {
-            if (_discordClient.GetChannel(LogChannelId) is ITextChannel channel)
-            {
-                var summary = await GenerateTradeSummaryAsync(session);
-                var logMessage = $"🔄 **Trade Completed**\n" +
-                                $"**Session ID**: `{session.SessionId}`\n" +
-                                $"**Participants**: <@{session.Player1Id}> (`{session.Player1Id}`) ↔ <@{session.Player2Id}> (`{session.Player2Id}`)\n" +
-                                $"**Completed**: <t:{new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds()}:F>\n\n" +
-                                $"{summary}";
+            var summary = await GenerateTradeSummaryAsync(session);
+            var logMessage = $"🔄 **Trade Completed**\n" +
+                            $"**Session ID**: `{session.SessionId}`\n" +
+                            $"**Participants**: <@{session.Player1Id}> (`{session.Player1Id}`) ↔ <@{session.Player2Id}> (`{session.Player2Id}`)\n" +
+                            $"**Completed**: <t:{new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds()}:F>\n\n" +
+                            $"{summary}";
 
-                await channel.SendMessageAsync(logMessage);
-            }
+            await _botLog.SendAsync(logMessage);
         }
         catch
         {
             // Logging errors are not critical
-        }
-    }
-
-    private async Task NotifyTradeCompletionAsync(TradeSession session, List<(ulong PokemonId, string PokemonName, ulong NewOwnerId, string? Evolution)> evolutions)
-    {
-        try
-        {
-            var user1 = _discordClient.GetUser(session.Player1Id);
-            var user2 = _discordClient.GetUser(session.Player2Id);
-
-            var evolutionMessage = "";
-            if (evolutions.Any(e => e.Evolution != null))
-            {
-                evolutionMessage = "\n\n🌟 **Trade Evolutions!**\n" + 
-                    string.Join("\n", evolutions
-                        .Where(e => e.Evolution != null)
-                        .Select(e => $"• {e.PokemonName} evolved into **{e.Evolution}**!"));
-            }
-
-            // DM notifications removed per user request
-        }
-        catch
-        {
-            // DM errors are not critical
         }
     }
 

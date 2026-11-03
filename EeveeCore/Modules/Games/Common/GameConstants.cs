@@ -68,37 +68,37 @@ public static class GameConstants
         /// <summary>
         ///     Cherry reel symbol emoji.
         /// </summary>
-        public const string Cherry = "<:cherryreel:1180361727330766858>";
+        public const string Cherry = "<:cherryreel:1566977713246310401>";
 
         /// <summary>
         ///     Pikachu reel symbol emoji.
         /// </summary>
-        public const string Pikachu = "<:pikareel:1180362895113060436>";
+        public const string Pikachu = "<:pikareel:1566977871640014851>";
 
         /// <summary>
         ///     Present reel symbol emoji.
         /// </summary>
-        public const string Present = "<:presentreel:1180361805462241322>";
+        public const string Present = "<:presentreel:1566977521835048962>";
 
         /// <summary>
         ///     Purple reel symbol emoji.
         /// </summary>
-        public const string Purple = "<:purpreel:1180372108061192272>";
+        public const string Purple = "<:purpreel:1566977535047110659>";
 
         /// <summary>
         ///     Coin reel symbol emoji.
         /// </summary>
-        public const string Coin = "<:coinreel:1180361707906940959>";
+        public const string Coin = "<:coinreel:1566977719676178434>";
 
         /// <summary>
         ///     Star reel symbol emoji.
         /// </summary>
-        public const string Star = "<:starreel:1180372080236179496>";
+        public const string Star = "<:starreel:1566977605863739392>";
 
         /// <summary>
         ///     Seven reel symbol emoji.
         /// </summary>
-        public const string Seven = "<:7reel:1180361763498246204>";
+        public const string Seven = "<:7reel:1566977235200512000>";
 
         /// <summary>
         ///     All slot machine symbols.

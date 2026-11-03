@@ -14,21 +14,19 @@ namespace EeveeCore.Modules.Trade.Services;
 public class GiftService : INService
 {
     private readonly LinqToDbConnectionProvider _dbProvider;
-    private readonly DiscordShardedClient _discordClient;
+    private readonly BotLog _botLog;
     private readonly ITradeLockService _tradeLockService;
-    
-    private const ulong LogChannelId = 1004571710323957830;
 
     /// <summary>
     ///     Initializes a new instance of the <see cref="GiftService" /> class.
     /// </summary>
     /// <param name="dbProvider">The LinqToDB connection provider.</param>
-    /// <param name="discordClient">The Discord client.</param>
+    /// <param name="botLog">The bot event log.</param>
     /// <param name="tradeLockService">The trade lock service.</param>
-    public GiftService(LinqToDbConnectionProvider dbProvider, DiscordShardedClient discordClient, ITradeLockService tradeLockService)
+    public GiftService(LinqToDbConnectionProvider dbProvider, BotLog botLog, ITradeLockService tradeLockService)
     {
         _dbProvider = dbProvider;
-        _discordClient = discordClient;
+        _botLog = botLog;
         _tradeLockService = tradeLockService;
     }
 
@@ -202,7 +200,7 @@ public class GiftService : INService
         
         // Get Pokemon
         var ownership = await db.UserPokemonOwnerships
-            .FirstOrDefaultAsync(o => o.UserId == giverId && o.Position == (ulong)pokemonPosition);
+            .FirstOrDefaultAsync(o => o.UserId == giverId && o.Position == (ulong)pokemonPosition - 1);
 
         if (ownership == null)
         {
@@ -421,21 +419,7 @@ public class GiftService : INService
         }
     }
 
-    private async Task SendLogMessageAsync(string message)
-    {
-        try
-        {
-            var channel = _discordClient.GetChannel(LogChannelId) as ITextChannel;
-            if (channel != null)
-            {
-                await channel.SendMessageAsync(message);
-            }
-        }
-        catch
-        {
-            // Logging errors are not critical
-        }
-    }
+    private Task SendLogMessageAsync(string message) => _botLog.SendAsync(message);
 
     #endregion
 }

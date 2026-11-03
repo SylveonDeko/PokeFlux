@@ -11,8 +11,8 @@ namespace EeveeCore.Modules.Parties.Services;
 ///     with support for saving multiple party configurations.
 /// </summary>
 /// <param name="dbProvider">The LinqToDB connection provider for accessing party and user data.</param>
-/// <param name="client">The Discord client for user and channel interactions.</param>
-public class PartyService(LinqToDbConnectionProvider dbProvider, DiscordShardedClient client) : INService
+/// <param name="botLog">The bot event log.</param>
+public class PartyService(LinqToDbConnectionProvider dbProvider, BotLog botLog) : INService
 {
     /// <summary>
     ///     Dictionary storing paged results for users viewing party data.
@@ -182,12 +182,13 @@ public class PartyService(LinqToDbConnectionProvider dbProvider, DiscordShardedC
     ///     Shows Pokémon in each slot along with their collection indices.
     /// </summary>
     /// <param name="userId">The Discord ID of the user.</param>
+    /// <param name="prefix">The server's command prefix.</param>
     /// <param name="partyName">The name of the party to view, or null to view the active party.</param>
     /// <returns>
     ///     A task representing the asynchronous operation that returns an EmbedBuilder
     ///     with the party information, or null if the party doesn't exist.
     /// </returns>
-    public async Task<EmbedBuilder> GetPartyViewEmbed(ulong userId, string partyName = null)
+    public async Task<EmbedBuilder> GetPartyViewEmbed(ulong userId, string prefix, string? partyName = null)
     {
         await using var db = await dbProvider.GetConnectionAsync();
 
@@ -293,7 +294,7 @@ public class PartyService(LinqToDbConnectionProvider dbProvider, DiscordShardedC
             }
         }
 
-        embed.WithFooter($"Use '/party load {partyName}' and then '/party add <slot_number>' to add a Pokemon");
+        embed.WithFooter($"Use '{prefix}party load {partyName}' and then '{prefix}party add <slot_number>' to add a Pokemon");
         return embed;
     }
 
@@ -751,9 +752,7 @@ public class PartyService(LinqToDbConnectionProvider dbProvider, DiscordShardedC
         }
         catch (Exception ex)
         {
-            // Log the error
-            if (client.GetChannel(1004311971853779005) is SocketTextChannel errorChannel)
-                await errorChannel.SendMessageAsync($"**__ERROR OCCURRED__**: ```{ex.Message}\n{ex.StackTrace}```");
+            await botLog.SendAsync($"**__ERROR OCCURRED__**: ```{ex.Message}\n{ex.StackTrace}```");
 
             return (false, "Something went wrong\nPlease try running this command again.");
         }

@@ -1,20 +1,14 @@
 ﻿using System.Text.Json.Serialization;
-using Discord.Commands;
-using Discord.Interactions;
 using EeveeCore.AuthHandlers;
 using EeveeCore.Common.ModuleBehaviors;
 using EeveeCore.Services.Impl;
-using Fergun.Interactive;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.OpenApi.Models;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using Serilog;
-using RunMode = Discord.Commands.RunMode;
 
 namespace EeveeCore;
-
-using EventHandler = EventHandler;
 
 /// <summary>
 ///     The main entry point class for the Mewdeko application.
@@ -238,16 +232,22 @@ public class Program
         // Add Serilog to service collection
         services.AddSerilog(LogSetup.SetupLogger("EeveeCore"));
         
-        var client = new DiscordShardedClient(new DiscordSocketConfig
+        var token = credentials.Token.StartsWith("Bot ", StringComparison.OrdinalIgnoreCase)
+            ? credentials.Token
+            : $"Bot {credentials.Token}";
+        var client = new FluxerClient(token, new FluxerConfig
         {
-            MessageCacheSize = 15,
-            LogLevel = LogSeverity.Debug,
-            ConnectionTimeout = int.MaxValue,
-            AlwaysDownloadUsers = true,
-            GatewayIntents = GatewayIntents.All ^ GatewayIntents.GuildPresences,
-            LogGatewayIntentWarnings = false,
-            DefaultRetryMode = RetryMode.RetryRatelimit
+            GatewaySerilog = Log.Logger.ForContext("SourceContext", "Fluxer.Gateway"),
+            RestSerilog = Log.Logger.ForContext("SourceContext", "Fluxer.Rest")
         });
+
+        if (!string.IsNullOrWhiteSpace(credentials.FluxerInstanceUrl))
+        {
+            var instanceUrl = credentials.FluxerInstanceUrl.Trim().TrimEnd('/');
+            if (!instanceUrl.Contains("://", StringComparison.Ordinal))
+                instanceUrl = $"https://{instanceUrl}";
+            client.LoginAsync(instanceUrl).GetAwaiter().GetResult();
+        }
 
         services.AddSingleton(client)
             .AddSingleton(credentials)
@@ -258,19 +258,15 @@ public class Program
             .AddSingleton<RedisCache>()
             .AddSingleton<IDataCache>(s => s.GetRequiredService<RedisCache>())
             .AddSingleton<DatabaseMigrator>()
-            .AddSingleton<EventHandler>()
-            .AddSingleton<InteractiveService>()
             .AddSingleton(new CommandService(new CommandServiceConfig
             {
                 CaseSensitiveCommands = false,
                 DefaultRunMode = RunMode.Async
             }))
-            .AddSingleton(s => new InteractionService(s.GetRequiredService<DiscordShardedClient>()))
             .AddSingleton<GuildSettingsService>()
             .AddSingleton<CommandHandler>()
             .AddSingleton<EeveeCore>()
-            .AddHostedService<EeveeCoreService>()
-            .AddHostedService<BackgroundTaskService>();
+            .AddHostedService<EeveeCoreService>();
 
         services.Scan(scan => scan.FromAssemblyOf<IReadyExecutor>()
             .AddClasses(classes => classes.AssignableToAny(

@@ -1,17 +1,14 @@
 ﻿using System.Diagnostics;
 using System.Reflection;
-using Discord.Commands;
-using Discord.Interactions;
 using EeveeCore.Common.ModuleBehaviors;
-using EeveeCore.Database.Models.Mongo.Discord;
+using Fluxer.Net.Gateway;
 using Serilog;
-using TypeReader = Discord.Commands.TypeReader;
 
 namespace EeveeCore;
 
 /// <summary>
-///     The main class for EeveeCore, responsible for initializing services, handling events, and managing the bot's
-///     lifecycle.
+///     Starts the bot: connects to Fluxer, runs database migrations, loads the text command modules and runs the
+///     services that wait for the bot to be ready.
 /// </summary>
 public class EeveeCore
 {
@@ -23,10 +20,8 @@ public class EeveeCore
     {
         Services = services;
         Credentials = Services.GetRequiredService<BotCredentials>();
-        Cache = Services.GetRequiredService<IDataCache>();
-        Client = Services.GetRequiredService<DiscordShardedClient>();
+        Client = Services.GetRequiredService<FluxerClient>();
         CommandService = Services.GetRequiredService<CommandService>();
-        GuildSettingsService = Services.GetRequiredService<GuildSettingsService>();
     }
 
     /// <summary>
@@ -34,14 +29,11 @@ public class EeveeCore
     /// </summary>
     public BotCredentials Credentials { get; }
 
-    private int ReadyCount { get; set; }
-
     /// <summary>
-    ///     Gets the Discord client used by the bot.
+    ///     Gets the Fluxer client used by the bot.
     /// </summary>
-    public DiscordShardedClient Client { get; }
+    public FluxerClient Client { get; }
 
-    private GuildSettingsService GuildSettingsService { get; }
     private CommandService CommandService { get; }
 
     /// <summary>
@@ -60,17 +52,10 @@ public class EeveeCore
     public TaskCompletionSource<bool> Ready { get; } = new();
 
     private IServiceProvider Services { get; }
-    private IDataCache Cache { get; }
-
-    /// <summary>
-    ///     Event that occurs when the bot joins a guild.
-    /// </summary>
-    public event Func<Guild, Task> JoinedGuild = delegate { return Task.CompletedTask; };
 
     private void LoadTypeReaders(Assembly assembly)
     {
-        var sw = new Stopwatch();
-        sw.Start();
+        var sw = Stopwatch.StartNew();
 
         Type[] allTypes;
         try
@@ -83,45 +68,35 @@ public class EeveeCore
             return;
         }
 
-        var filteredTypes = allTypes
-            .Where(x => x.IsSubclassOf(typeof(TypeReader))
-                        && x.BaseType.GetGenericArguments().Length > 0
-                        && !x.IsAbstract);
-
-        foreach (var ft in filteredTypes)
+        foreach (var type in allTypes.Where(x => x.IsSubclassOf(typeof(TypeReader))
+                                                 && x.BaseType?.GetGenericArguments().Length > 0
+                                                 && !x.IsAbstract))
         {
-            var x = (TypeReader)ActivatorUtilities.CreateInstance(Services, ft);
-            var baseType = ft.BaseType;
-            var typeArgs = baseType?.GetGenericArguments();
-            if (typeArgs != null)
-                CommandService.AddTypeReader(typeArgs[0], x);
+            var reader = (TypeReader)ActivatorUtilities.CreateInstance(Services, type);
+            CommandService.AddTypeReader(type.BaseType!.GetGenericArguments()[0], reader);
         }
 
-        sw.Stop();
         Log.Information("TypeReaders loaded in {ElapsedTotalSeconds}s", sw.Elapsed.TotalSeconds);
     }
 
-    private async Task LoginAsync(string token)
+    private async Task LoginAsync()
     {
-        Client.Log += Client_Log;
-        var clientReady = new TaskCompletionSource<bool>();
-
-        Task SetClientReady(DiscordSocketClient discordSocketClient)
-        {
-            ReadyCount++;
-            Log.Information($"Shard {discordSocketClient.ShardId} is ready");
-            Log.Information($"{ReadyCount}/{Client.Shards.Count} shards connected");
-            if (ReadyCount != Client.Shards.Count)
-                return Task.CompletedTask;
-            _ = Task.Run(() => clientReady.TrySetResult(true));
-            return Task.CompletedTask;
-        }
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Client.Gateway.Ready += _ => ready.TrySetResult();
 
         Log.Information("Logging in...");
         try
         {
-            await Client.LoginAsync(TokenType.Bot, token.Trim()).ConfigureAwait(false);
-            await Client.StartAsync().ConfigureAwait(false);
+            await Client.Gateway.ConnectAsync(new FluxerGatewayConfig
+            {
+                Cache = new FluxerCacheConfig
+                {
+                    Messages = new CacheLimits
+                    {
+                        MaxPerChannel = 15, Expiry = TimeSpan.FromHours(6)
+                    }
+                }
+            }).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -129,74 +104,48 @@ public class EeveeCore
             throw;
         }
 
-        Client.ShardReady += SetClientReady;
-        await clientReady.Task.ConfigureAwait(false);
-        Client.ShardReady -= SetClientReady;
-        Client.JoinedGuild += Client_JoinedGuild;
-        Client.LeftGuild += Client_LeftGuild;
-        Log.Information("Logged in.");
-        Log.Information("Logged in as:");
+        await ready.Task.ConfigureAwait(false);
+        Client.Gateway.GuildJoined += OnGuildJoinedAsync;
+        Client.Gateway.GuildLeft += OnGuildLeftAsync;
+        Log.Information("Logged in as {User}", Client.Gateway.CurrentUser?.Username);
     }
 
-    private Task Client_LeftGuild(SocketGuild guild)
+    private async Task OnGuildJoinedAsync(SocketGuild guild)
     {
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var chan = await Client.Rest.GetChannelAsync(Credentials.GuildJoinsChannelId).ConfigureAwait(false);
-                await ((ITextChannel)chan).SendMessageAsync(
-                    embed: new EmbedBuilder()
-                        .WithTitle($"Left server: {guild.Name} [{guild.Id}]")
-                        .AddField("Total Guilds", Client.Guilds.Count)
-                        .WithColor(ErrorColor)
-                        .Build());
-            }
-            catch
-            {
-                // Ignored
-            }
-
-            Log.Information("Left server: {Name} [{Id}]", guild.Name, guild.Id);
-        });
-        return Task.CompletedTask;
+        Log.Information("Joined server: {Name} [{Id}]", guild.Name, guild.Id);
+        await SendGuildLogAsync(new EmbedBuilder()
+            .WithTitle($"Joined {guild.Name} {guild.Id}")
+            .AddField("Members", guild.MemberCount)
+            .AddField("Owner", guild.OwnerId)
+            .AddField("Total servers", Client.Gateway.Guilds.Count)
+            .WithThumbnailUrl(guild.GetIconUrl())
+            .WithOkColor());
     }
 
-    private Task Client_JoinedGuild(SocketGuild guild)
+    private async Task OnGuildLeftAsync(SocketGuild guild)
     {
-        _ = Task.Run(async () =>
-        {
-            await guild.DownloadUsersAsync().ConfigureAwait(false);
-            Log.Information("Joined server: {Name} [{Id}]", guild.Name, guild.Id);
-
-            var gc = await GuildSettingsService.GetGuildConfigAsync(guild.Id).ConfigureAwait(false);
-            await JoinedGuild.Invoke(gc).ConfigureAwait(false);
-
-            try
-            {
-                var chan =
-                    await Client.Rest.GetChannelAsync(Credentials.GuildJoinsChannelId).ConfigureAwait(false) as
-                        ITextChannel;
-                var eb = new EmbedBuilder()
-                    .WithTitle($"Joined {Format.Bold(guild.Name)} {guild.Id}")
-                    .AddField("Members", guild.MemberCount)
-                    .AddField("Text Channels", guild.TextChannels.Count)
-                    .AddField("Voice Channels", guild.VoiceChannels.Count)
-                    .AddField("Owner", $"Name: {guild.Owner}\nID: {guild.OwnerId}")
-                    .AddField("Total Guilds", Client.Guilds.Count)
-                    .WithThumbnailUrl(guild.IconUrl)
-                    .WithColor(OkColor);
-
-                await chan.SendMessageAsync(embed: eb.Build()).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Ignored
-            }
-        });
-        return Task.CompletedTask;
+        Log.Information("Left server: {Name} [{Id}]", guild.Name, guild.Id);
+        await SendGuildLogAsync(new EmbedBuilder()
+            .WithTitle($"Left server: {guild.Name} [{guild.Id}]")
+            .AddField("Total servers", Client.Gateway.Guilds.Count)
+            .WithErrorColor());
     }
 
+    private async Task SendGuildLogAsync(EmbedBuilder embed)
+    {
+        if (Credentials.GuildJoinsChannelId == 0)
+            return;
+
+        try
+        {
+            await Client.Rest.SendMessageAsync(Credentials.GuildJoinsChannelId, embeds: [embed.Build()])
+                .ConfigureAwait(false);
+        }
+        catch (FluxerApiException ex)
+        {
+            Log.Warning(ex, "Could not post to the server join log channel");
+        }
+    }
 
     /// <summary>
     ///     Runs the bot, initializing all necessary components and services.
@@ -206,26 +155,16 @@ public class EeveeCore
     {
         var sw = Stopwatch.StartNew();
 
-        await LoginAsync(Credentials.Token).ConfigureAwait(false);
+        await LoginAsync().ConfigureAwait(false);
 
         Log.Information("Loading Services...");
         try
         {
             LoadTypeReaders(typeof(EeveeCore).Assembly);
 
-            // Run database migrations
             var migrator = Services.GetRequiredService<DatabaseMigrator>();
-            var migrationSuccessful = await migrator.MigrateAsync();
-            if (!migrationSuccessful)
-            {
+            if (!await migrator.MigrateAsync())
                 throw new InvalidOperationException("Database migration failed");
-            }
-
-            // Small delay to ensure migration connections are fully disposed
-            await Task.Delay(100);
-
-            var dbProvider = Services.GetRequiredService<LinqToDbConnectionProvider>();
-            await using var context = await dbProvider.GetConnectionAsync();
         }
         catch (Exception ex)
         {
@@ -233,18 +172,11 @@ public class EeveeCore
             throw;
         }
 
-        sw.Stop();
         Log.Information("Connected in {Elapsed:F2}s", sw.Elapsed.TotalSeconds);
-
-        // Initialize Commands
-        var commandService = Services.GetRequiredService<CommandService>();
-        commandService.Log += LogCommandsService;
-        var interactionService = Services.GetRequiredService<InteractionService>();
 
         try
         {
-            await commandService.AddModulesAsync(Assembly.GetExecutingAssembly(), Services);
-            await interactionService.AddModulesAsync(Assembly.GetExecutingAssembly(), Services);
+            await CommandService.AddModulesAsync(Assembly.GetExecutingAssembly(), Services);
         }
         catch (Exception e)
         {
@@ -252,29 +184,15 @@ public class EeveeCore
             throw;
         }
 
-        // Register commands based on environment
-#if !DEBUG
-        await interactionService.RegisterCommandsGloballyAsync().ConfigureAwait(false);
-#else
-        if (Client.Guilds.Select(x => x.Id).Contains(Credentials.DebugGuildId))
-            await interactionService.RegisterCommandsToGuildAsync(Credentials.DebugGuildId);
-#endif
-
+        Services.GetRequiredService<CommandHandler>();
         await ExecuteReadySubscriptions();
         Ready.TrySetResult(true);
         Log.Information("Ready.");
     }
 
-    private Task LogCommandsService(LogMessage arg)
-    {
-        Log.Information(arg.ToString());
-        return Task.CompletedTask;
-    }
-
     private async Task ExecuteReadySubscriptions()
     {
-        var readyExecutors = Services.GetServices<IReadyExecutor>();
-        var tasks = readyExecutors.Select(async toExec =>
+        var tasks = Services.GetServices<IReadyExecutor>().Select(async toExec =>
         {
             try
             {
@@ -287,11 +205,5 @@ public class EeveeCore
             }
         });
         await Task.WhenAll(tasks);
-    }
-
-    private static Task Client_Log(LogMessage arg)
-    {
-        Log.Information(arg.ToString());
-        return Task.CompletedTask;
     }
 }

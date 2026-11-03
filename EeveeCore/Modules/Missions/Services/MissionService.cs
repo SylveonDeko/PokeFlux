@@ -7,6 +7,7 @@ using LinqToDB;
 using LinqToDB.Async;
 using MongoDB.Driver;
 using Serilog;
+using User = EeveeCore.Database.Linq.Models.Bot.User;
 
 namespace EeveeCore.Modules.Missions.Services;
 
@@ -15,10 +16,10 @@ namespace EeveeCore.Modules.Missions.Services;
 ///     XP management, level calculations, and reward processing.
 /// </summary>
 public class MissionService(
-    DiscordShardedClient client,
+    FluxerClient client,
+    BotLog botLog,
     IMongoService mongoService,
-    LinqToDbConnectionProvider dbProvider,
-    EventHandler eventHandler) : INService, IReadyExecutor
+    LinqToDbConnectionProvider dbProvider) : INService, IReadyExecutor
 {
     /// <summary>
     ///     Initializes the mission service and registers event handlers.
@@ -34,67 +35,67 @@ public class MissionService(
     /// <summary>
     ///     Event fired when a Pokemon is bred.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction, Database.Linq.Models.Pokemon.Pokemon, bool>? PokemonBred;
+    public event Func<CommandContext, Database.Linq.Models.Pokemon.Pokemon, bool, Task>? PokemonBred;
 
     /// <summary>
     ///     Event fired when a Pokemon is caught.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction>? PokemonCaught;
+    public event Func<CommandContext, Task>? PokemonCaught;
 
     /// <summary>
     ///     Event fired when a Pokemon is hatched.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IMessage, Database.Linq.Models.Pokemon.Pokemon>? PokemonHatched;
+    public event Func<SocketMessage, Database.Linq.Models.Pokemon.Pokemon, Task>? PokemonHatched;
 
     /// <summary>
     ///     Event fired when a Pokemon is fished.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IMessage, User>? PokemonFished;
+    public event Func<SocketMessage, User, Task>? PokemonFished;
 
     /// <summary>
     ///     Event fired when a duel is completed.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction, object, object>? DuelCompleted;
+    public event Func<CommandContext, object, object, Task>? DuelCompleted;
 
     /// <summary>
     ///     Event fired when an NPC battle is completed.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction, object, object>? NpcBattleCompleted;
+    public event Func<CommandContext, object, object, Task>? NpcBattleCompleted;
 
     /// <summary>
     ///     Event fired when a user levels up.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<ulong, int>? UserLeveledUp;
+    public event Func<ulong, int, Task>? UserLeveledUp;
 
     /// <summary>
     ///     Event fired when EV training occurs.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction, int>? EvTraining;
+    public event Func<CommandContext, int, Task>? EvTraining;
 
     /// <summary>
     ///     Event fired when Pokemon setup occurs.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction, string, int>? PokemonSetup;
+    public event Func<CommandContext, string, int, Task>? PokemonSetup;
 
     /// <summary>
     ///     Event fired when a party is registered.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction>? PartyRegistered;
+    public event Func<CommandContext, Task>? PartyRegistered;
 
     /// <summary>
     ///     Event fired when XP is gained.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<ulong, int>? XpGained;
+    public event Func<ulong, int, Task>? XpGained;
 
     /// <summary>
     ///     Event fired when a word search game is completed.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction, int>? GameWordSearchCompleted;
+    public event Func<CommandContext, int, Task>? GameWordSearchCompleted;
 
     /// <summary>
     ///     Event fired when a slot machine game is played.
     /// </summary>
-    public event EventHandler.AsyncEventHandler<IDiscordInteraction, bool>? GameSlotsPlayed;
+    public event Func<CommandContext, bool, Task>? GameSlotsPlayed;
 
     #endregion
 
@@ -581,7 +582,7 @@ public class MissionService(
     /// </summary>
     public void RegisterEventHandlers()
     {
-        eventHandler.MessageReceived += HandleMessageReceived;
+        client.Gateway.MessageCreated += HandleMessageReceived;
         
         // Subscribe to custom events
         PokemonBred += HandlePokemonBred;
@@ -644,7 +645,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandlePokemonBred(IDiscordInteraction interaction, Database.Linq.Models.Pokemon.Pokemon pokemon, bool shadow)
+    private async Task HandlePokemonBred(CommandContext interaction, Database.Linq.Models.Pokemon.Pokemon pokemon, bool shadow)
     {
         try
         {
@@ -683,7 +684,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandlePokemonCaught(IDiscordInteraction interaction)
+    private async Task HandlePokemonCaught(CommandContext interaction)
     {
         try
         {
@@ -713,7 +714,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandlePokemonHatched(IMessage message, Database.Linq.Models.Pokemon.Pokemon pokemon)
+    private async Task HandlePokemonHatched(SocketMessage message, Database.Linq.Models.Pokemon.Pokemon pokemon)
     {
         try
         {
@@ -730,12 +731,7 @@ public class MissionService(
                     {
                         xpGained += 1 + (mission.Reward / 2);
                         // Send completion message to channel
-                        await message.Channel.SendMessageAsync("Daily Mission Completed.", 
-                            embed: new EmbedBuilder()
-                                .WithTitle("Congratulations!\nTake this reward!")
-                                .WithDescription($"{mission.Reward} shards of Crystallized Ditto Slime.")
-                                .WithColor(MissionConstants.MissionCompleteColor)
-                                .Build());
+                        await SendMissionCompletionMessage(message.Channel, mission.Reward);
                     }
                 }
             }
@@ -749,7 +745,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandlePokemonFished(IMessage message, User user)
+    private async Task HandlePokemonFished(SocketMessage message, User user)
     {
         try
         {
@@ -766,12 +762,7 @@ public class MissionService(
                     {
                         xpGained += 1 + (mission.Reward / 2);
                         // Send completion message to channel
-                        await message.Channel.SendMessageAsync("Daily Mission Completed.", 
-                            embed: new EmbedBuilder()
-                                .WithTitle("Congratulations!\nTake this reward!")
-                                .WithDescription($"{mission.Reward} shards of Crystallized Ditto Slime.")
-                                .WithColor(MissionConstants.MissionCompleteColor)
-                                .Build());
+                        await SendMissionCompletionMessage(message.Channel, mission.Reward);
                     }
                 }
             }
@@ -785,7 +776,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandleDuelCompleted(IDiscordInteraction interaction, object battle, object winner)
+    private async Task HandleDuelCompleted(CommandContext interaction, object battle, object winner)
     {
         try
         {
@@ -815,7 +806,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandleNpcBattleCompleted(IDiscordInteraction interaction, object winner, object battle)
+    private async Task HandleNpcBattleCompleted(CommandContext interaction, object winner, object battle)
     {
         try
         {
@@ -864,9 +855,7 @@ public class MissionService(
                 }
             }
 
-            // Send level up notification
-            var channel = client.GetChannel(MissionConstants.LevelUpChannelId) as ITextChannel;
-            await channel?.SendMessageAsync($"<@{userId}> is now level {newLevel}!");
+            await botLog.SendAsync($"<@{userId}> is now level {newLevel}!");
 
             if (XpGained != null)
                 await XpGained(userId, xpGained);
@@ -877,7 +866,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandleEvTraining(IDiscordInteraction interaction, int amount)
+    private async Task HandleEvTraining(CommandContext interaction, int amount)
     {
         try
         {
@@ -907,7 +896,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandlePokemonSetup(IDiscordInteraction interaction, string actionType, int amount)
+    private async Task HandlePokemonSetup(CommandContext interaction, string actionType, int amount)
     {
         try
         {
@@ -945,7 +934,7 @@ public class MissionService(
         }
     }
 
-    private async Task HandlePartyRegistered(IDiscordInteraction interaction)
+    private async Task HandlePartyRegistered(CommandContext interaction)
     {
         try
         {
@@ -990,9 +979,9 @@ public class MissionService(
     /// <summary>
     ///     Handles word search game completion events.
     /// </summary>
-    /// <param name="interaction">The Discord interaction.</param>
+    /// <param name="interaction">The context of the game's command.</param>
     /// <param name="wordsFound">The number of words found in the game.</param>
-    private async Task HandleGameWordSearchCompleted(IDiscordInteraction interaction, int wordsFound)
+    private async Task HandleGameWordSearchCompleted(CommandContext interaction, int wordsFound)
     {
         try
         {
@@ -1025,9 +1014,9 @@ public class MissionService(
     /// <summary>
     ///     Handles slot machine game played events.
     /// </summary>
-    /// <param name="interaction">The Discord interaction.</param>
+    /// <param name="interaction">The context of the game's command.</param>
     /// <param name="won">Whether the player won the slot machine game.</param>
-    private async Task HandleGameSlotsPlayed(IDiscordInteraction interaction, bool won)
+    private async Task HandleGameSlotsPlayed(CommandContext interaction, bool won)
     {
         try
         {
@@ -1078,7 +1067,10 @@ public class MissionService(
         }
     }
 
-    private static async Task SendMissionCompletionMessage(IDiscordInteraction interaction, int reward)
+    private static Task SendMissionCompletionMessage(CommandContext interaction, int reward) =>
+        SendMissionCompletionMessage(interaction.Channel, reward);
+
+    private static async Task SendMissionCompletionMessage(Channel channel, int reward)
     {
         try
         {
@@ -1088,10 +1080,7 @@ public class MissionService(
                 .WithColor(MissionConstants.MissionCompleteColor)
                 .Build();
 
-            if (interaction.HasResponded)
-                await interaction.FollowupAsync("Daily Mission Completed.", embed: embed);
-            else
-                await interaction.RespondAsync("Daily Mission Completed.", embed: embed);
+            await channel.SendMessageAsync("Daily Mission Completed.", [embed]);
         }
         catch (Exception e)
         {
@@ -1106,9 +1095,9 @@ public class MissionService(
     /// <summary>
     ///     Triggers the GameWordSearchCompleted event.
     /// </summary>
-    /// <param name="interaction">The Discord interaction.</param>
+    /// <param name="interaction">The context of the game's command.</param>
     /// <param name="wordsFound">The number of words found in the game.</param>
-    public async Task TriggerGameWordSearchCompletedAsync(IDiscordInteraction interaction, int wordsFound)
+    public async Task TriggerGameWordSearchCompletedAsync(CommandContext interaction, int wordsFound)
     {
         if (GameWordSearchCompleted != null)
             await GameWordSearchCompleted(interaction, wordsFound);
@@ -1117,9 +1106,9 @@ public class MissionService(
     /// <summary>
     ///     Triggers the GameSlotsPlayed event.
     /// </summary>
-    /// <param name="interaction">The Discord interaction.</param>
+    /// <param name="interaction">The context of the game's command.</param>
     /// <param name="won">Whether the player won the slot machine game.</param>
-    public async Task TriggerGameSlotsPlayedAsync(IDiscordInteraction interaction, bool won)
+    public async Task TriggerGameSlotsPlayedAsync(CommandContext interaction, bool won)
     {
         if (GameSlotsPlayed != null)
             await GameSlotsPlayed(interaction, won);
@@ -1132,7 +1121,7 @@ public class MissionService(
     /// <summary>
     ///     Fires a pokemon bred event.
     /// </summary>
-    public async Task FirePokemonBredEvent(IDiscordInteraction interaction, Database.Linq.Models.Pokemon.Pokemon pokemon, bool shadow = false)
+    public async Task FirePokemonBredEvent(CommandContext interaction, Database.Linq.Models.Pokemon.Pokemon pokemon, bool shadow = false)
     {
         if (PokemonBred != null)
             await PokemonBred(interaction, pokemon, shadow);
@@ -1141,7 +1130,7 @@ public class MissionService(
     /// <summary>
     ///     Fires a pokemon caught event.
     /// </summary>
-    public async Task FirePokemonCaughtEvent(IDiscordInteraction interaction)
+    public async Task FirePokemonCaughtEvent(CommandContext interaction)
     {
         if (PokemonCaught != null)
             await PokemonCaught(interaction);
@@ -1150,7 +1139,7 @@ public class MissionService(
     /// <summary>
     ///     Fires a pokemon hatched event.
     /// </summary>
-    public async Task FirePokemonHatchedEvent(IMessage message, Database.Linq.Models.Pokemon.Pokemon pokemon)
+    public async Task FirePokemonHatchedEvent(SocketMessage message, Database.Linq.Models.Pokemon.Pokemon pokemon)
     {
         if (PokemonHatched != null)
             await PokemonHatched(message, pokemon);
@@ -1159,7 +1148,7 @@ public class MissionService(
     /// <summary>
     ///     Fires a pokemon fished event.
     /// </summary>
-    public async Task FirePokemonFishedEvent(IMessage message, User user)
+    public async Task FirePokemonFishedEvent(SocketMessage message, User user)
     {
         if (PokemonFished != null)
             await PokemonFished(message, user);
@@ -1168,7 +1157,7 @@ public class MissionService(
     /// <summary>
     ///     Fires a duel completed event.
     /// </summary>
-    public async Task FireDuelCompletedEvent(IDiscordInteraction interaction, object battle, object winner)
+    public async Task FireDuelCompletedEvent(CommandContext interaction, object battle, object winner)
     {
         if (DuelCompleted != null)
             await DuelCompleted(interaction, battle, winner);
@@ -1177,7 +1166,7 @@ public class MissionService(
     /// <summary>
     ///     Fires an NPC battle completed event.
     /// </summary>
-    public async Task FireNpcBattleCompletedEvent(IDiscordInteraction interaction, object winner, object battle)
+    public async Task FireNpcBattleCompletedEvent(CommandContext interaction, object winner, object battle)
     {
         if (NpcBattleCompleted != null)
             await NpcBattleCompleted(interaction, winner, battle);
@@ -1186,7 +1175,7 @@ public class MissionService(
     /// <summary>
     ///     Fires an EV training event.
     /// </summary>
-    public async Task FireEvTrainingEvent(IDiscordInteraction interaction, int amount = 1)
+    public async Task FireEvTrainingEvent(CommandContext interaction, int amount = 1)
     {
         if (EvTraining != null)
             await EvTraining(interaction, amount);
@@ -1195,7 +1184,7 @@ public class MissionService(
     /// <summary>
     ///     Fires a pokemon setup event.
     /// </summary>
-    public async Task FirePokemonSetupEvent(IDiscordInteraction interaction, string actionType, int amount)
+    public async Task FirePokemonSetupEvent(CommandContext interaction, string actionType, int amount)
     {
         if (PokemonSetup != null)
             await PokemonSetup(interaction, actionType, amount);
@@ -1204,7 +1193,7 @@ public class MissionService(
     /// <summary>
     ///     Fires a party registered event.
     /// </summary>
-    public async Task FirePartyRegisteredEvent(IDiscordInteraction interaction)
+    public async Task FirePartyRegisteredEvent(CommandContext interaction)
     {
         if (PartyRegistered != null)
             await PartyRegistered(interaction);

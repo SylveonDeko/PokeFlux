@@ -18,21 +18,20 @@ namespace EeveeCore.Modules.Parties.Services;
 ///     Also handles egg hatching when counters reach zero.
 /// </summary>
 /// <param name="dbContext">The database context for accessing egg and user data.</param>
-/// <param name="client">The Discord client for user and channel interactions.</param>
-/// <param name="eventHandler">The event handler for Discord events.</param>
+/// <param name="client">The Fluxer client, for messages and usernames.</param>
+/// <param name="botLog">The bot event log.</param>
 /// <param name="missionService">The mission service for tracking mission progress.</param>
 /// <param name="pokemonService">The Pokemon service for creating hatched Pokemon.</param>
 public class HatcheryService(
-    LinqToDbConnectionProvider dbContext, 
-    DiscordShardedClient client,
-    EventHandler eventHandler,
+    LinqToDbConnectionProvider dbContext,
+    FluxerClient client,
+    BotLog botLog,
     MissionService missionService,
     PokemonService pokemonService) : INService, IReadyExecutor
 {
-    private const string PremiumX2Icon = "<:premiumX2:1064764945578852382>";
-    private const string PremiumX3Icon = "<:premiumX3:1064764942848376893>";
+    private const string PremiumX2Icon = Emojis.PremiumX2;
+    private const string PremiumX3Icon = Emojis.PremiumX3;
 
-    private readonly EventHandler _eventHandler = eventHandler;
     private readonly MissionService _missionService = missionService;
     private readonly PokemonService _pokemonService = pokemonService;
     private readonly Random _random = new();
@@ -96,10 +95,10 @@ public class HatcheryService(
     /// <summary>
     ///     Initializes the hatchery service and registers the message handler for egg hatching.
     /// </summary>
-    public async Task OnReadyAsync()
+    public Task OnReadyAsync()
     {
-        await Task.CompletedTask;
-        _eventHandler.MessageReceived += HandleMessageForEggHatching;
+        client.Gateway.MessageCreated += HandleMessageForEggHatching;
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -107,14 +106,14 @@ public class HatcheryService(
     ///     Decrements egg counters and converts eggs to Pokemon when they hatch.
     /// </summary>
     /// <param name="message">The received message.</param>
-    private async Task HandleMessageForEggHatching(IMessage message)
+    private async Task HandleMessageForEggHatching(SocketMessage message)
     {
         try
         {
-            if (message.Author.IsBot || message.Channel is not ITextChannel channel)
+            if (message.Author is not { IsBot: false } author || message.Guild is not { } guild)
                 return;
 
-            var userId = message.Author.Id;
+            var userId = author.Id;
 
             // Implement cooldown to prevent spam (similar to Python version)
             var now = DateTime.UtcNow;
@@ -134,7 +133,7 @@ public class HatcheryService(
             // Process each hatchery group (1, 2, 3)
             for (short group = 1; group <= 3; group++)
             {
-                var groupHatched = await ProcessHatcheryGroup(userId, group, channel.Guild.Id);
+                var groupHatched = await ProcessHatcheryGroup(userId, group, guild.Id);
                 hatchedEggs.AddRange(groupHatched);
             }
 
@@ -339,7 +338,7 @@ public class HatcheryService(
     /// <summary>
     ///     Sends hatching notifications to the channel.
     /// </summary>
-    private async Task SendHatchingNotifications(IMessage message, List<(string EggName, Database.Linq.Models.Pokemon.Pokemon Pokemon)> hatchedEggs)
+    private async Task SendHatchingNotifications(SocketMessage message, List<(string EggName, Database.Linq.Models.Pokemon.Pokemon Pokemon)> hatchedEggs)
     {
         try
         {
@@ -363,7 +362,7 @@ public class HatcheryService(
                     .WithColor(new Color(0xFF, 0x49, 0xE6))
                     .Build();
 
-                await message.Channel.SendMessageAsync(embed: embed);
+                await message.Channel.SendMessageAsync(embeds: [embed]);
             }
         }
         catch (Exception ex)
@@ -613,9 +612,7 @@ public class HatcheryService(
         }
         catch (Exception ex)
         {
-            // Log the error
-            if (client.GetChannel(1004311971853779005) is SocketTextChannel errorChannel)
-                await errorChannel.SendMessageAsync($"**__ERROR OCCURRED__**: ```{ex.Message}\n{ex.StackTrace}```");
+            await botLog.SendAsync($"**__ERROR OCCURRED__**: ```{ex.Message}\n{ex.StackTrace}```");
 
             return (false, "Something went wrong\nPlease try running this command again.");
         }
@@ -733,9 +730,7 @@ public class HatcheryService(
         }
         catch (Exception ex)
         {
-            // Log the error
-            if (client.GetChannel(1004311971853779005) is SocketTextChannel errorChannel)
-                await errorChannel.SendMessageAsync($"**__ERROR OCCURRED__**: ```{ex.Message}\n{ex.StackTrace}```");
+            await botLog.SendAsync($"**__ERROR OCCURRED__**: ```{ex.Message}\n{ex.StackTrace}```");
 
             return (false, "Something went wrong\nPlease try running this command again.");
         }
@@ -1096,9 +1091,7 @@ public class HatcheryService(
         }
         catch (Exception ex)
         {
-            // Log the error
-            if (client.GetChannel(1004311971853779005) is SocketTextChannel errorChannel)
-                await errorChannel.SendMessageAsync($"**__ERROR OCCURRED__**: ```{ex.Message}\n{ex.StackTrace}```");
+            await botLog.SendAsync($"**__ERROR OCCURRED__**: ```{ex.Message}\n{ex.StackTrace}```");
 
             return (false, "Something went wrong\nPlease try running this command again.");
         }
@@ -1236,9 +1229,9 @@ public class HatcheryService(
     }
 
     /// <summary>
-    ///     Retrieves a user's Discord username from their ID.
+    ///     Retrieves a user's username from their ID.
     /// </summary>
-    /// <param name="userId">The Discord ID of the user.</param>
+    /// <param name="userId">The ID of the user.</param>
     /// <returns>
     ///     A task representing the asynchronous operation that returns the user's username,
     ///     or "Unknown User" if the user cannot be found.
@@ -1247,8 +1240,7 @@ public class HatcheryService(
     {
         try
         {
-            var user = client.GetUser(userId);
-            return user?.Username ?? "Unknown User";
+            return await client.GetUsernameAsync(userId) ?? "Unknown User";
         }
         catch
         {

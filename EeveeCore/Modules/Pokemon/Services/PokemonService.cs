@@ -19,12 +19,12 @@ namespace EeveeCore.Modules.Pokemon.Services;
 /// <summary>
 ///     Service class for handling Pokemon-related operations.
 /// </summary>
-/// <param name="client">The Discord sharded client.</param>
+/// <param name="botLog">The bot event log.</param>
 /// <param name="dbProvider">The database connection provider.</param>
 /// <param name="mongo">The MongoDB service.</param>
 /// <param name="redis">The Redis cache service.</param>
 public class PokemonService(
-    DiscordShardedClient client,
+    BotLog botLog,
     LinqToDbConnectionProvider dbProvider,
     IMongoService mongo,
     RedisCache redis)
@@ -305,7 +305,7 @@ public class PokemonService(
             .FirstOrDefaultAsync(u => u.UserId == userId);
 
         if (user == null)
-            return (false, "You have not started! Use /start first.");
+            return (false, "You have not started! Use `/start` first.");
 
         if (pokeNumber <= 0)
             return (false, "Invalid pokemon number.");
@@ -1418,7 +1418,7 @@ public class PokemonService(
         ulong pokemonId,
         string activeItem = null,
         bool overrideLvl100 = false,
-        IMessageChannel channel = null)
+        Channel? channel = null)
     {
         await using var db = await dbProvider.GetConnectionAsync();
         var pokemon = await db.UserPokemon.FirstOrDefaultAsync(p => p.Id == pokemonId);
@@ -1532,7 +1532,7 @@ public class PokemonService(
                     .WithDescription($"Your {originalName} has evolved into {evoName}!")
                     .WithColor(Color.Blue);
 
-                await channel.SendMessageAsync(embed: embed.Build());
+                await channel.SendMessageAsync(embeds: [embed.Build()]);
             }
             catch (Exception ex)
             {
@@ -1643,9 +1643,7 @@ public class PokemonService(
             if (makeShadow)
             {
                 skin = "shadow";
-                // Log shadow creation
-                if (client.GetChannel(1005737655025291334) is IMessageChannel channel)
-                    await channel.SendMessageAsync($"`{userId} - {pokemonName}`");
+                await botLog.SendAsync($"Shadow: `{userId} - {pokemonName}`");
             }
         }
 

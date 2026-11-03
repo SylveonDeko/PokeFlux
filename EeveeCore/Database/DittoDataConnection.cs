@@ -4,6 +4,7 @@ using EeveeCore.Database.Linq.Models.Art;
 using EeveeCore.Database.Linq.Models.Bot;
 using EeveeCore.Database.Linq.Models.Game;
 using EeveeCore.Database.Linq.Models.Pokemon;
+using User = EeveeCore.Database.Linq.Models.Bot.User;
 
 namespace EeveeCore.Database;
 

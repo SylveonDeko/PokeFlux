@@ -221,12 +221,12 @@ public static class MissionConstants
     /// <summary>
     ///     Crystal Slime emoji ID.
     /// </summary>
-    public const string CrystalSlimeEmojiId = "<:CrystallizedSlime:1177415347121422386>";
+    public const string CrystalSlimeEmojiId = Emojis.CrystallizedSlime;
 
     /// <summary>
     ///     Mission completion emoji ID.
     /// </summary>
-    public const string MissionEmojiId = "<:mission:1175491390499717180>";
+    public const string MissionEmojiId = Emojis.Mission;
 
     #endregion
 

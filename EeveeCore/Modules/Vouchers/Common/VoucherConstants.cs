@@ -6,25 +6,6 @@ namespace EeveeCore.Modules.Vouchers.Common;
 public static class VoucherConstants
 {
     /// <summary>
-    ///     The Discord guild ID where voucher requests are processed.
-    /// </summary>
-    public const ulong VoucherGuildId = 986087590128128060;
-
-    /// <summary>
-    ///     The Discord forum channel ID where voucher requests are posted.
-    /// </summary>
-    public const ulong VoucherForumChannelId = 1235617198903394344;
-
-    /// <summary>
-    ///     The Discord user IDs that are allowed to manage voucher requests.
-    /// </summary>
-    public static readonly HashSet<ulong> AllowedManagerIds = new()
-    {
-        266799734910353410,
-        790722073248661525
-    };
-
-    /// <summary>
     ///     Available status options for voucher requests.
     /// </summary>
     public static readonly string[] StatusOptions = 

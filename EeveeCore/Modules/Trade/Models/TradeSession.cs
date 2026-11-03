@@ -79,10 +79,10 @@ public class TradeSession
     public DateTime ExpiresAt { get; set; } = DateTime.UtcNow.AddMinutes(6);
 
     /// <summary>
-    ///     Gets or sets the Discord message associated with this trade session.
+    ///     Gets or sets the message that shows this trade session.
     /// </summary>
     [JsonIgnore]
-    public IUserMessage? TradeMessage { get; set; }
+    public Message? TradeMessage { get; set; }
 
     /// <summary>
     ///     Gets or sets a value indicating whether Player1 has confirmed the trade.

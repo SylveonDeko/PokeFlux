@@ -109,9 +109,9 @@ public class TradeEvolutionService : INService
     /// </summary>
     /// <param name="pokemonId">The ID of the Pokemon to check for evolution.</param>
     /// <param name="newOwnerId">The new owner of the Pokemon.</param>
-    /// <param name="interaction">The Discord interaction to send evolution messages to.</param>
+    /// <param name="channel">The channel to send evolution messages to.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    public async Task CheckAndProcessTradeEvolutionAsync(ulong pokemonId, ulong newOwnerId, IDiscordInteraction interaction)
+    public async Task CheckAndProcessTradeEvolutionAsync(ulong pokemonId, ulong newOwnerId, Channel channel)
     {
         try
         {
@@ -145,12 +145,12 @@ public class TradeEvolutionService : INService
                 // Check for trade evolution trigger (evolution_trigger_id == 2)
                 if (evolution.EvolutionTriggerId == 2)
                 {
-                    await ProcessTradeEvolution(pokemon, evolution, newOwnerId, interaction);
+                    await ProcessTradeEvolution(pokemon, evolution, newOwnerId, channel);
                 }
                 // Check for held item trade evolution
                 else if (evolution.HeldItemId.HasValue)
                 {
-                    await ProcessHeldItemTradeEvolution(pokemon, evolution, newOwnerId, interaction);
+                    await ProcessHeldItemTradeEvolution(pokemon, evolution, newOwnerId, channel);
                 }
             }
         }
@@ -167,12 +167,12 @@ public class TradeEvolutionService : INService
     /// <param name="pokemon">The Pokemon to evolve.</param>
     /// <param name="evolution">The evolution data.</param>
     /// <param name="newOwnerId">The new owner of the Pokemon.</param>
-    /// <param name="interaction">The Discord interaction to send messages to.</param>
+    /// <param name="channel">The channel to send messages to.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     private async Task ProcessTradeEvolution(Database.Linq.Models.Pokemon.Pokemon pokemon,
-        Database.Models.Mongo.Pokemon.Evolution evolution, 
-        ulong newOwnerId, 
-        IDiscordInteraction interaction)
+        Database.Models.Mongo.Pokemon.Evolution evolution,
+        ulong newOwnerId,
+        Channel channel)
     {
         // Get the evolved species name
         var evolvedSpecies = await _mongoService.PFile
@@ -201,7 +201,7 @@ public class TradeEvolutionService : INService
             .WithColor(Color.Gold)
             .Build();
 
-        await interaction.FollowupAsync(embed: embed);
+        await channel.SendMessageAsync(embeds: [embed]);
     }
 
     /// <summary>
@@ -210,12 +210,12 @@ public class TradeEvolutionService : INService
     /// <param name="pokemon">The Pokemon to evolve.</param>
     /// <param name="evolution">The evolution data.</param>
     /// <param name="newOwnerId">The new owner of the Pokemon.</param>
-    /// <param name="interaction">The Discord interaction to send messages to.</param>
+    /// <param name="channel">The channel to send messages to.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     private async Task ProcessHeldItemTradeEvolution(Database.Linq.Models.Pokemon.Pokemon pokemon,
-        Database.Models.Mongo.Pokemon.Evolution evolution, 
-        ulong newOwnerId, 
-        IDiscordInteraction interaction)
+        Database.Models.Mongo.Pokemon.Evolution evolution,
+        ulong newOwnerId,
+        Channel channel)
     {
         if (!evolution.HeldItemId.HasValue)
         {
@@ -268,7 +268,7 @@ public class TradeEvolutionService : INService
             .WithColor(Color.Gold)
             .Build();
 
-        await interaction.FollowupAsync(embed: embed);
+        await channel.SendMessageAsync(embeds: [embed]);
     }
 
     /// <summary>

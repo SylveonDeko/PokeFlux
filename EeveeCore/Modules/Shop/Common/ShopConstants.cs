@@ -6,15 +6,9 @@ namespace EeveeCore.Modules.Shop.Common;
 public static class ShopConstants
 {
     /// <summary>
-    ///     The maximum number of items that can be displayed per page in the shop.
-    ///     Limited to 25 to match Discord's select menu option limit.
+    ///     The number of items shown per page in the shop.
     /// </summary>
     public const int ItemsPerPage = 10;
-
-    /// <summary>
-    ///     The default time in minutes for shop session timeout.
-    /// </summary>
-    public const int SessionTimeoutMinutes = 15;
 
     /// <summary>
     ///     The minimum number of Pokemon required to unlock the radiant shop.

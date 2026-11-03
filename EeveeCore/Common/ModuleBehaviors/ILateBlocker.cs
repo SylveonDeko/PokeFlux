@@ -1,7 +1,4 @@
-﻿using Discord.Commands;
-using Discord.Interactions;
-
-namespace EeveeCore.Common.ModuleBehaviors;
+﻿namespace EeveeCore.Common.ModuleBehaviors;
 
 /// <summary>
 ///     Interface to be implemented by modules that block execution after a command has been executed.
@@ -16,7 +13,7 @@ public interface ILateBlocker
     /// <summary>
     ///     Tries to block the execution of subsequent modules after a command has been executed.
     /// </summary>
-    /// <param name="client">The Discord client.</param>
+    /// <param name="client">The Fluxer client.</param>
     /// <param name="context">The command context.</param>
     /// <param name="moduleName">The name of the module.</param>
     /// <param name="command">The command that was executed.</param>
@@ -24,19 +21,5 @@ public interface ILateBlocker
     ///     A task that represents the asynchronous operation. The task result contains a boolean indicating whether the
     ///     module blocked the execution.
     /// </returns>
-    Task<bool> TryBlockLate(DiscordShardedClient client, ICommandContext context,
-        string moduleName, CommandInfo command);
-
-    /// <summary>
-    ///     Tries to block the execution of subsequent modules after a command has been executed.
-    /// </summary>
-    /// <param name="client">The Discord client.</param>
-    /// <param name="context">The interaction context.</param>
-    /// <param name="command">The command that was executed.</param>
-    /// <returns>
-    ///     A task that represents the asynchronous operation. The task result contains a boolean indicating whether the
-    ///     module blocked the execution.
-    /// </returns>
-    Task<bool> TryBlockLate(DiscordShardedClient client, IInteractionContext context,
-        ICommandInfo command);
+    Task<bool> TryBlockLate(FluxerClient client, ICommandContext context, string moduleName, CommandInfo command);
 }

@@ -10,7 +10,7 @@ public partial class DuelPokemon
     /// <summary>
     ///     Creates a new DuelPokemon object asynchronously using the raw data provided.
     /// </summary>
-    public static async Task<DuelPokemon> Create(IInteractionContext ctx, Database.Linq.Models.Pokemon.Pokemon pokemon, IMongoService mongoService)
+    public static async Task<DuelPokemon> Create(Database.Linq.Models.Pokemon.Pokemon pokemon, IMongoService mongoService)
     {
         // Initialize local variables from pokemon object
         var pn = pokemon.PokemonName;

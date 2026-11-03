@@ -21,9 +21,8 @@ namespace EeveeCore.Modules.Fishing.Services;
 public class FishingService : INService, IReadyExecutor
 {
     private readonly IDataCache _cache;
-    private readonly DiscordShardedClient _client;
+    private readonly FluxerClient _client;
     private readonly LinqToDbConnectionProvider _dbProvider;
-    private readonly EventHandler _eventHandler;
     private readonly IMongoService _mongoService;
     private readonly PokemonService _pokemonService;
     private readonly MissionService _missionService;
@@ -40,18 +39,16 @@ public class FishingService : INService, IReadyExecutor
     /// <param name="mongoService">The MongoDB service for accessing game data.</param>
     /// <param name="dbProvider">The LinqToDB connection provider for database operations.</param>
     /// <param name="cache">Cache service for Redis operations.</param>
-    /// <param name="client">The Discord client for interactions.</param>
-    /// <param name="eventHandler">The event handler for Discord events.</param>
+    /// <param name="client">The Fluxer client, for messages and catches.</param>
     /// <param name="pokemonService">Pokemon service for Pokemon-related operations.</param>
     /// <param name="missionService">Mission service for tracking mission progress.</param>
-    public FishingService(IMongoService mongoService, LinqToDbConnectionProvider dbProvider, IDataCache cache, 
-        DiscordShardedClient client, EventHandler eventHandler, PokemonService pokemonService, MissionService missionService)
+    public FishingService(IMongoService mongoService, LinqToDbConnectionProvider dbProvider, IDataCache cache,
+        FluxerClient client, PokemonService pokemonService, MissionService missionService)
     {
         _mongoService = mongoService;
         _dbProvider = dbProvider;
         _cache = cache;
         _client = client;
-        _eventHandler = eventHandler;
         _pokemonService = pokemonService;
         _missionService = missionService;
         _random = new Random();
@@ -62,25 +59,26 @@ public class FishingService : INService, IReadyExecutor
     /// </summary>
     public Task OnReadyAsync()
     {
-        _eventHandler.MessageReceived += OnMessageReceived;
+        _client.Gateway.MessageCreated += OnMessageReceived;
         return Task.CompletedTask;
     }
 
     /// <summary>
     ///     Handles incoming messages to check for fishing catches.
     /// </summary>
-    private async Task OnMessageReceived(SocketMessage arg)
+    private async Task OnMessageReceived(SocketMessage message)
     {
-        if (arg is not SocketUserMessage message || message.Author.IsBot)
+        if (message.Author is not { IsBot: false } || message.Guild is null)
             return;
 
         // Check if the message mentions the bot
-        if (message.MentionedUsers.All(u => u.Id != _client.CurrentUser.Id))
+        var mentions = message.Mentions?.ToList() ?? [];
+        if (mentions.All(u => u.Id != _client.Gateway.CurrentUser?.Id))
             return;
 
         // Remove mentions from content before processing
         var content = message.Content;
-        foreach (var mention in message.MentionedUsers)
+        foreach (var mention in mentions)
         {
             content = content.Replace($"<@{mention.Id}>", "").Replace($"<@!{mention.Id}>", "");
         }
@@ -127,7 +125,7 @@ public class FishingService : INService, IReadyExecutor
         // Add success reaction
         try
         {
-            await message.AddReactionAsync(new Emoji("✅"));
+            await message.AddReactionAsync("✅");
         }
         catch
         {
@@ -135,10 +133,7 @@ public class FishingService : INService, IReadyExecutor
         }
 
         // Update the fishing message
-        if (message.Channel is ITextChannel textChannel)
-        {
-            await UpdateFishingMessage(fishingData.MessageId, textChannel, result, fishingData);
-        }
+        await UpdateFishingMessage(fishingData.MessageId, message.Channel, result, fishingData);
 
         // Clean up the fishing data and timer
         await RemoveUserActiveFishingData(message.Author.Id);
@@ -183,21 +178,21 @@ public class FishingService : INService, IReadyExecutor
     /// <summary>
     ///     Handles a fishing attempt for a user.
     /// </summary>
-    /// <param name="interaction">The Discord interaction context.</param>
+    /// <param name="ctx">The context of the fish command.</param>
     /// <returns>A FishingResult with information about the fishing outcome.</returns>
-    public async Task<FishingResult> HandleFishing(IInteractionContext interaction)
+    public async Task<FishingResult> HandleFishing(CommandContext ctx)
     {
         try
         {
             // Check if this user is already fishing anywhere
-            var existingFishing = await GetUserActiveFishingData(interaction.User.Id);
+            var existingFishing = await GetUserActiveFishingData(ctx.User.Id);
             if (existingFishing != null)
             {
                 return new FishingResult(false, "You already have an active fishing attempt! Wait for it to finish or time out.", null);
             }
 
             await using var context = await _dbProvider.GetConnectionAsync();
-            var user = await context.Users.FirstOrDefaultAsync(u => u.UserId == interaction.User.Id);
+            var user = await context.Users.FirstOrDefaultAsync(u => u.UserId == ctx.User.Id);
 
             if (user == null)
             {
@@ -213,7 +208,7 @@ public class FishingService : INService, IReadyExecutor
             // Check energy
             if ((user.Energy ?? 0) <= 0)
             {
-                return new FishingResult(false, "You don't have any energy left!\nYou can get more energy now by voting!\nTry using `/ditto vote`!", null);
+                return new FishingResult(false, "You don't have any energy left!\nEnergy comes back over time.", null);
             }
 
             // Check rod requirements
@@ -249,7 +244,7 @@ public class FishingService : INService, IReadyExecutor
             }
 
             await context.GetTable<User>()
-                .Where(u => u.UserId == interaction.User.Id)
+                .Where(u => u.UserId == ctx.User.Id)
                 .Set(u => u.FishingExp, user.FishingExp)
                 .UpdateAsync();
 
@@ -282,16 +277,16 @@ public class FishingService : INService, IReadyExecutor
                 RemainingEnergy = user.Energy ?? 0,
                 TimeLimit = totalTime,
                 ShowMultiBox = (user.FishingLevel ?? 1) < 100 && _random.Next(0, FishingConstants.MultiBoxChance) == 0,
-                CasterId = interaction.User.Id,
-                GuildId = interaction.Guild?.Id ?? 0,
-                ChannelId = interaction.Channel.Id
+                CasterId = ctx.User.Id,
+                GuildId = ctx.Guild?.Id ?? 0,
+                ChannelId = ctx.Channel.Id
             };
 
             return result;
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Error processing fishing for user {UserId}", interaction.User.Id);
+            Log.Error(ex, "Error processing fishing for user {UserId}", ctx.User.Id);
             return new FishingResult(false, "An error occurred while fishing. Please try again later.", null);
         }
     }
@@ -357,7 +352,7 @@ public class FishingService : INService, IReadyExecutor
             .UpdateAsync();
 
         var rewardMessages = new List<string>();
-        var shinyEmote = isShiny ? "<a:shiny:1057764628349853786>" : "";
+        var shinyEmote = isShiny ? Emojis.Shiny : "";
 
         rewardMessages.Add(
             $"{shinyEmote}Congratulations, you have caught a **{pokemonName}** `({ivPercent}% iv)`!{shinyEmote}");
@@ -738,22 +733,15 @@ public class FishingService : INService, IReadyExecutor
                 await RemoveUserActiveFishingData(userId);
 
                 // Update the message to show timeout
-                if (_client.GetChannel(fishingData.ChannelId) is ITextChannel channel)
+                if (await _client.Rest.GetMessageAsync(fishingData.ChannelId, messageId) is { } message)
                 {
-                    if (await channel.GetMessageAsync(messageId) is IUserMessage message)
-                    {
-                        var timeoutEmbed = new EmbedBuilder()
-                            .WithTitle("The Pokemon got away!")
-                            .WithDescription("The Pokemon slipped away before you could catch it!")
-                            .WithColor(Color.Red)
-                            .Build();
+                    var timeoutEmbed = new EmbedBuilder()
+                        .WithTitle("The Pokemon got away!")
+                        .WithDescription("The Pokemon slipped away before you could catch it!")
+                        .WithColor(Color.Red)
+                        .Build();
 
-                        await message.ModifyAsync(m =>
-                        {
-                            m.Embed = timeoutEmbed;
-                            m.Components = new ComponentBuilder().Build();
-                        });
-                    }
+                    await message.ModifyAsync(embeds: [timeoutEmbed]);
                 }
             };
 
@@ -769,11 +757,11 @@ public class FishingService : INService, IReadyExecutor
     /// <summary>
     ///     Updates the fishing message after a successful catch.
     /// </summary>
-    private async Task UpdateFishingMessage(ulong messageId, ITextChannel channel, CatchResult result, FishingData fishingData)
+    private async Task UpdateFishingMessage(ulong messageId, Channel channel, CatchResult result, FishingData fishingData)
     {
         try
         {
-            if (await channel.GetMessageAsync(messageId) is not IUserMessage message)
+            if (await _client.Rest.GetMessageAsync(channel.Id, messageId) is not { } message)
                 return;
 
             // Create success embed
@@ -792,16 +780,12 @@ public class FishingService : INService, IReadyExecutor
             var energyPhrase = string.Format(_random.Choice(FishingConstants.EnergyPhrases), fishingData.RemainingEnergy);
             successEmbed.WithFooter(energyPhrase);
 
-            await message.ModifyAsync(m =>
-            {
-                m.Embed = successEmbed.Build();
-                m.Components = new ComponentBuilder().Build();
-            });
+            await message.ModifyAsync(embeds: [successEmbed.Build()]);
 
             // Send additional response embed
             if (result.ResponseEmbed != null)
             {
-                await channel.SendMessageAsync(embed: result.ResponseEmbed);
+                await channel.SendMessageAsync(embeds: [result.ResponseEmbed]);
             }
         }
         catch (Exception ex)
@@ -892,7 +876,7 @@ public class FishingResult
     /// <summary>
     ///     Gets or sets the embed to display.
     /// </summary>
-    public Embed? ResponseEmbed { get; set; }
+    public EmbedRequest? ResponseEmbed { get; set; }
     
     /// <summary>
     ///     Gets or sets the name of the Pokemon caught.
@@ -960,7 +944,7 @@ public class FishingResult
     /// <param name="success">Whether the fishing attempt was successful.</param>
     /// <param name="message">The error message if unsuccessful.</param>
     /// <param name="responseEmbed">The embed to display.</param>
-    public FishingResult(bool success, string? message, Embed? responseEmbed)
+    public FishingResult(bool success, string? message, EmbedRequest? responseEmbed)
     {
         Success = success;
         Message = message;
@@ -978,7 +962,7 @@ public class FishingResult
 public record CatchResult(
     bool Success,
     string? Message,
-    Embed? ResponseEmbed,
+    EmbedRequest? ResponseEmbed,
     double IvPercent);
 
 /// <summary>

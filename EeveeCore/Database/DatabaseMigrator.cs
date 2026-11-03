@@ -38,6 +38,7 @@ public class DatabaseMigrator : INService
                     .PostgresqlDatabase(_connectionString)
                     .WithScriptsEmbeddedInAssembly(Assembly.GetExecutingAssembly(), script => script.StartsWith("EeveeCore.Database.Migrations."))
                     .WithTransaction()
+                    .WithVariablesDisabled()
                     .LogToConsole()
                     .Build();
 

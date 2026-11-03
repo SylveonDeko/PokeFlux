@@ -54,9 +54,9 @@ public class MarketService : INService
 {
     private readonly LinqToDbConnectionProvider _dbProvider;
     private readonly IDataCache _cache;
-    private readonly DiscordShardedClient _discordClient;
+    private readonly FluxerClient _client;
+    private readonly BotLog _botLog;
     private const string MarketLockKey = "marketlock";
-    private const ulong LogChannelId = 1008748026799587408;
     private const int BaseMarketLimit = 30;
 
     /// <summary>
@@ -64,12 +64,14 @@ public class MarketService : INService
     /// </summary>
     /// <param name="dbProvider">The LinqToDB connection provider.</param>
     /// <param name="cache">The Redis cache service.</param>
-    /// <param name="discordClient">The Discord client.</param>
-    public MarketService(LinqToDbConnectionProvider dbProvider, IDataCache cache, DiscordShardedClient discordClient)
+    /// <param name="client">The Fluxer client, for direct messages.</param>
+    /// <param name="botLog">The bot event log.</param>
+    public MarketService(LinqToDbConnectionProvider dbProvider, IDataCache cache, FluxerClient client, BotLog botLog)
     {
         _dbProvider = dbProvider;
         _cache = cache;
-        _discordClient = discordClient;
+        _client = client;
+        _botLog = botLog;
     }
 
     /// <inheritdoc />
@@ -81,7 +83,7 @@ public class MarketService : INService
             if (price > int.MaxValue)
                 return MarketResult.FromError("Price too high.");
 
-            if (pokemonPosition == 1)
+            if (pokemonPosition <= 1)
                 return MarketResult.FromError("You cannot list your first Pokemon on the market.");
 
             await using var db = await _dbProvider.GetConnectionAsync();
@@ -97,7 +99,7 @@ public class MarketService : INService
 
             // Get Pokemon from ownership table
             var ownership = await db.UserPokemonOwnerships
-                .FirstOrDefaultAsync(o => o.UserId == userId && o.Position == pokemonPosition);
+                .FirstOrDefaultAsync(o => o.UserId == userId && o.Position == pokemonPosition - 1);
 
             if (ownership == null)
                 return MarketResult.FromError("You don't have that Pokemon.");
@@ -143,8 +145,8 @@ public class MarketService : INService
             // Remove Pokemon from user's ownership
             await db.DeleteAsync(ownership);
 
-            await LogMarketTransactionAsync(LogChannelId,
-                $"**ID** - `{marketListing.Id}`\n<a:plus:1008763677509431446> : <@{userId}>(`{userId}`) **ADDED** **{pokemon.PokemonName}**.\n-----------------------------");
+            await LogMarketTransactionAsync(
+                $"**ID** - `{marketListing.Id}`\n➕ :<@{userId}>(`{userId}`) **ADDED** **{pokemon.PokemonName}**.\n-----------------------------");
 
             return MarketResult.FromSuccess(
                 $"You have added your {pokemon.PokemonName} to the market! It is market listing #{marketListing.Id}.",
@@ -206,8 +208,8 @@ public class MarketService : INService
             .Set(m => m.BuyerId, 0UL)
             .UpdateAsync();
 
-        await LogMarketTransactionAsync(LogChannelId, 
-            $"**ID** - `{listingId}`\n<a:minus:1008763512652304555> : <@{userId}>(`{userId}`) **REMOVED** {pokemon.PokemonName} from the market.\n-----------------------------");
+        await LogMarketTransactionAsync(
+            $"**ID** - `{listingId}`\n➖ :<@{userId}>(`{userId}`) **REMOVED** {pokemon.PokemonName} from the market.\n-----------------------------");
 
         return MarketResult.FromSuccess($"You have removed your {pokemon.PokemonName} from the market");
     }
@@ -288,21 +290,19 @@ public class MarketService : INService
             .Set(a => a.MarketSold, a => a.MarketSold + 1)
             .UpdateAsync();
 
-        await LogMarketTransactionAsync(LogChannelId, 
-            $"**ID** - `{listingId}`\n<a:plus:1008763677509431446> : <@{buyerId}>(`{buyerId}`) **BOUGHT** a **{pokemon.PokemonName}**. Seller - (<@{listing.OwnerId}>)`{listing.OwnerId}`.\n-----------------------------");
+        await LogMarketTransactionAsync(
+            $"**ID** - `{listingId}`\n➕ : <@{buyerId}>(`{buyerId}`) **BOUGHT** a **{pokemon.PokemonName}**. Seller - (<@{listing.OwnerId}>)`{listing.OwnerId}`.\n-----------------------------");
 
         // Send DMs
         try
         {
-            var buyerUser = _discordClient.GetUser(buyerId);
-            await buyerUser.SendMessageAsync($"You have Successfully Bought A {pokemon.PokemonName} for {listing.Price} credits.");
+            await _client.SendDirectMessageAsync(buyerId, $"You have Successfully Bought A {pokemon.PokemonName} for {listing.Price} credits.");
         }
         catch { }
 
         try
         {
-            var sellerUser = _discordClient.GetUser(listing.OwnerId);
-            await sellerUser.SendMessageAsync($"Your {pokemon.PokemonName} has been sold for {listing.Price} credits.");
+            await _client.SendDirectMessageAsync(listing.OwnerId, $"Your {pokemon.PokemonName} has been sold for {listing.Price} credits.");
         }
         catch { }
 
@@ -373,21 +373,11 @@ public class MarketService : INService
         }
     }
 
-    /// <inheritdoc />
-    public async Task LogMarketTransactionAsync(ulong channelId, string message)
-    {
-        try
-        {
-            if (_discordClient.GetChannel(channelId) is ITextChannel channel)
-            {
-                await channel.SendMessageAsync(message);
-            }
-        }
-        catch
-        {
-            // Log errors might not be critical, so we'll silently fail
-        }
-    }
+    /// <summary>
+    ///     Logs a market listing, removal or sale to the bot log.
+    /// </summary>
+    /// <param name="message">The log message.</param>
+    public Task LogMarketTransactionAsync(string message) => _botLog.SendAsync(message);
 
     /// <summary>
     ///     Gets all current market listings with sorting and filtering.

@@ -455,31 +455,25 @@ public class Trainer
 }
 
 /// <summary>
-///     Represents a Pokémon trainer that is a Discord user.
-///     Handles interactions with human players through Discord.
+///     Represents a Pokémon trainer that is a player, who picks actions with reactions.
 /// </summary>
 public class MemberTrainer : Trainer
 {
     /// <summary>
-    ///     Initializes a new instance of the MemberTrainer class with the specified Discord member and party.
+    ///     Initializes a new instance of the MemberTrainer class for a player and their party.
     /// </summary>
-    /// <param name="member">The Discord user representing this trainer.</param>
+    /// <param name="id">The player's user ID.</param>
+    /// <param name="name">The player's username.</param>
     /// <param name="party">The list of Pokémon in the trainer's party.</param>
-    public MemberTrainer(IUser member, List<DuelPokemon.DuelPokemon> party) : base(member.Username, party)
+    public MemberTrainer(ulong id, string name, List<DuelPokemon.DuelPokemon> party) : base(name, party)
     {
-        Id = member.Id;
-        Member = member;
+        Id = id;
     }
 
     /// <summary>
-    ///     Gets or sets the Discord ID of the member.
+    ///     Gets or sets the player's user ID.
     /// </summary>
     public ulong Id { get; set; }
-
-    /// <summary>
-    ///     Gets or sets the Discord user object representing this trainer.
-    /// </summary>
-    public IUser Member { get; set; }
 
     /// <summary>
     ///     Determines whether this trainer is a human player or an AI.

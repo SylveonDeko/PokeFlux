@@ -13,10 +13,11 @@ public class CommandResult
     /// <summary>
     ///     Gets or sets an optional embed to display with the message.
     /// </summary>
-    public Embed? Embed { get; set; }
+    public EmbedRequest? Embed { get; set; }
 
     /// <summary>
-    ///     Gets or sets a value indicating whether this response should be ephemeral (only visible to the user).
+    ///     Gets or sets a value indicating whether this response is only for the user. Commands send these by direct
+    ///     message.
     /// </summary>
     public bool Ephemeral { get; set; } = false;
 
@@ -48,7 +49,7 @@ public class CommandResult
     /// <param name="embed">The embed to display.</param>
     /// <param name="ephemeral">Whether the message should be ephemeral.</param>
     /// <returns>A CommandResult with embed.</returns>
-    public static CommandResult WithEmbed(Embed embed, bool ephemeral = false)
+    public static CommandResult WithEmbed(EmbedRequest embed, bool ephemeral = false)
     {
         return new CommandResult { Embed = embed, Ephemeral = ephemeral };
     }

@@ -13,8 +13,7 @@ namespace EeveeCore.Modules.Achievements.Services;
 /// </summary>
 public class AchievementService(
     IMongoService mongoService,
-    LinqToDbConnectionProvider dbProvider,
-    EventHandler eventHandler) : INService, IReadyExecutor
+    LinqToDbConnectionProvider dbProvider) : INService, IReadyExecutor
 {
 
     /// <summary>
@@ -47,8 +46,8 @@ public class AchievementService(
     /// <param name="userId">The user ID.</param>
     /// <param name="achievement">The achievement type.</param>
     /// <param name="increment">The amount to increment by.</param>
-    /// <param name="context">Optional context for notifications.</param>
-    public async Task UpdateAchievementAsync(ulong userId, string achievement, int increment = 1, IDiscordInteraction? context = null)
+    /// <param name="context">The channel to announce reached milestones in, if any.</param>
+    public async Task UpdateAchievementAsync(ulong userId, string achievement, int increment = 1, Channel? context = null)
     {
         try
         {
@@ -234,7 +233,7 @@ public class AchievementService(
     /// <summary>
     ///     Checks for milestone completions and distributes rewards.
     /// </summary>
-    private async Task CheckMilestonesAsync(ulong userId, string achievement, int currentValue, IDiscordInteraction? context = null)
+    private async Task CheckMilestonesAsync(ulong userId, string achievement, int currentValue, Channel? context = null)
     {
         try
         {
@@ -407,7 +406,7 @@ public class AchievementService(
     /// <summary>
     ///     Tracks Pokemon catching achievements including type-specific tracking.
     /// </summary>
-    public async Task TrackPokemonCaughtAsync(ulong userId, List<int> typeIds, bool isShiny = false, bool isShadow = false, IDiscordInteraction? context = null)
+    public async Task TrackPokemonCaughtAsync(ulong userId, List<int> typeIds, bool isShiny = false, bool isShadow = false, Channel? context = null)
     {
         // Track general catching
         await UpdateAchievementAsync(userId, "pokemon_caught", 1, context);
@@ -431,7 +430,7 @@ public class AchievementService(
     /// <summary>
     ///     Tracks breeding achievements with IV analysis.
     /// </summary>
-    public async Task TrackBreedingAsync(ulong userId, int[] ivs, bool isShiny = false, bool isShadow = false, IDiscordInteraction? context = null)
+    public async Task TrackBreedingAsync(ulong userId, int[] ivs, bool isShiny = false, bool isShadow = false, Channel? context = null)
     {
         await UpdateAchievementAsync(userId, "breed_success", 1, context);
 
@@ -465,7 +464,7 @@ public class AchievementService(
     /// <summary>
     ///     Tracks game achievements.
     /// </summary>
-    public async Task TrackGameAsync(ulong userId, string gameType, bool won = false, IDiscordInteraction? context = null)
+    public async Task TrackGameAsync(ulong userId, string gameType, bool won = false, Channel? context = null)
     {
         await UpdateAchievementAsync(userId, $"game_{gameType}", 1, context);
         
@@ -634,7 +633,7 @@ public class AchievementService(
     /// <summary>
     ///     Sends milestone completion notifications.
     /// </summary>
-    private static async Task SendMilestoneNotificationsAsync(IDiscordInteraction context, List<MilestoneCompletion> completions)
+    private static async Task SendMilestoneNotificationsAsync(Channel context, List<MilestoneCompletion> completions)
     {
         if (!completions.Any()) return;
 
@@ -654,10 +653,7 @@ public class AchievementService(
 
         embed.WithDescription(description);
 
-        if (context.HasResponded)
-            await context.FollowupAsync(embed: embed.Build());
-        else
-            await context.RespondAsync(embed: embed.Build());
+        await context.SendMessageAsync(embeds: [embed.Build()]);
     }
 
     #endregion

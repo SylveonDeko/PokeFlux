@@ -16,6 +16,7 @@ using Serilog;
 using StackExchange.Redis;
 using User = EeveeCore.Database.Linq.Models.Bot.User;
 using ActiveSpawn = EeveeCore.Database.Linq.Models.Game.ActiveSpawn;
+using Guild = EeveeCore.Database.Models.Mongo.Discord.Guild;
 
 namespace EeveeCore.Modules.Spawn.Services;
 
@@ -52,9 +53,19 @@ public class SpawnService : INService, IReadyExecutor
     private readonly IDataCache _cache;
 
     /// <summary>
-    ///     The Discord client for interaction with Discord.
+    ///     The Fluxer client, for messages in spawn channels.
     /// </summary>
-    private readonly DiscordShardedClient _client;
+    private readonly FluxerClient _client;
+
+    /// <summary>
+    ///     The bot event log.
+    /// </summary>
+    private readonly BotLog _botLog;
+
+    /// <summary>
+    ///     The hosted image links.
+    /// </summary>
+    private readonly MediaUrls _media;
 
     /// <summary>
     ///     Provider for database contexts.
@@ -103,18 +114,20 @@ public class SpawnService : INService, IReadyExecutor
     ///     Initializes a new instance of the SpawnService class.
     ///     Sets up event handlers and required services.
     /// </summary>
-    /// <param name="client">The Discord client for interactions.</param>
+    /// <param name="client">The Fluxer client, for messages in spawn channels.</param>
+    /// <param name="botLog">The bot event log.</param>
+    /// <param name="media">The hosted image links.</param>
     /// <param name="mongoDb">MongoDB service for data access.</param>
-    /// <param name="handler">Event handler for Discord events.</param>
     /// <param name="pokemonService">Pokemon service for Pokemon-related operations.</param>
     /// <param name="dbContextProvider">Provider for database access.</param>
     /// <param name="cache">Cache service for temporary data.</param>
     /// <param name="achievementService">Service for tracking achievements and milestones.</param>
     /// <param name="missionService">Service for handling mission-related operations.</param>
     public SpawnService(
-        DiscordShardedClient client,
+        FluxerClient client,
+        BotLog botLog,
+        MediaUrls media,
         IMongoService mongoDb,
-        EventHandler handler,
         PokemonService pokemonService,
         LinqToDbConnectionProvider dbContextProvider,
         IDataCache cache,
@@ -122,6 +135,8 @@ public class SpawnService : INService, IReadyExecutor
         MissionService missionService)
     {
         _client = client;
+        _botLog = botLog;
+        _media = media;
         _mongoDb = mongoDb;
         _pokemonService = pokemonService;
         _dbContextProvider = dbContextProvider;
@@ -130,7 +145,7 @@ public class SpawnService : INService, IReadyExecutor
         _missionService = missionService;
         _random = new Random();
 
-        handler.MessageReceived += HandleMessageAsync;
+        client.Gateway.MessageCreated += HandleMessageAsync;
     }
 
     /// <summary>
@@ -200,30 +215,35 @@ public class SpawnService : INService, IReadyExecutor
     }
 
     /// <summary>
-    ///     Handles incoming Discord messages to determine if a Pokemon should spawn.
-    ///     Checks against cooldowns, spawn chances, and guild configurations.
+    ///     Handles incoming messages: catches a spawn when the message names it, and otherwise decides whether a
+    ///     Pokemon should spawn, checking cooldowns, spawn chances, and guild configurations.
     /// </summary>
-    /// <param name="msg">The received message.</param>
+    /// <param name="message">The received message.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    private async Task HandleMessageAsync(SocketMessage msg)
+    private async Task HandleMessageAsync(SocketMessage message)
     {
-        if (msg.Author.IsBot || msg.Channel is not ITextChannel channel)
-            return;
-        
-        if (msg is not IUserMessage message)
+        if (message.Author is not { IsBot: false } || message.Guild is not { } guild)
             return;
 
-        var guildId = channel.Guild.Id;
+        var channel = message.Channel;
+        var guildId = guild.Id;
         if (EXCLUDED_GUILDS.Contains(guildId))
             return;
 
         try
         {
-            // Check for mention-based catching first
-            if (await HandleMentionCatch(message, channel))
-                return;
             var guildConfig = await GetGuildConfig(guildId);
             if (guildConfig == null) return;
+
+            if (GetMentionGuess(message) is { } mentionGuess)
+            {
+                await TryCatchAsync(message, mentionGuess);
+                return;
+            }
+
+            if (!guildConfig.ModalView && !string.IsNullOrWhiteSpace(message.Content)
+                                       && await TryCatchAsync(message, message.Content, false))
+                return;
 
             var now = DateTime.UtcNow;
             var cooldown = Math.Max(1, BASE_COOLDOWN - guildConfig.Speed);
@@ -237,13 +257,13 @@ public class SpawnService : INService, IReadyExecutor
 
             _spawnCache.AddOrUpdate(guildId, now, (_, _) => now);
 
-            if (message.Channel is IVoiceChannel)
+            if (channel.Type != ChannelType.GuildText)
                 return;
 
-            if (!await ValidateChannel(channel, guildConfig))
+            if (!ValidateChannel(channel, guildConfig))
                 return;
 
-            var spawnChannel = await GetSpawnChannel(channel, guildConfig);
+            var spawnChannel = GetSpawnChannel(guild, channel, guildConfig);
             if (spawnChannel == null) return;
 
             await using var db = await _dbContextProvider.GetConnectionAsync();
@@ -387,158 +407,143 @@ public class SpawnService : INService, IReadyExecutor
     }
 
     /// <summary>
-    ///     Handles mention-based Pokemon catching.
-    ///     Checks if a user mentioned the bot with a Pokemon name to catch a spawned Pokemon.
+    ///     Gets the Pokemon name from a message that mentions the bot followed by a name.
     /// </summary>
-    /// <param name="message">The Discord message to check.</param>
-    /// <param name="channel">The channel where the message was sent.</param>
-    /// <returns>True if the message was a catch attempt, false otherwise.</returns>
-    private async Task<bool> HandleMentionCatch(IUserMessage message, ITextChannel channel)
+    /// <param name="message">The message to check.</param>
+    /// <returns>The text after the mention, or null when the message does not start with a mention of the bot.</returns>
+    private string? GetMentionGuess(SocketMessage message)
     {
-        // Check if the message mentions the bot
-        if (message.MentionedUserIds.All(u => u != _client.CurrentUser.Id))
-            return false;
+        if (_client.Gateway.CurrentUser?.Id is not { } botId)
+            return null;
 
-        // Extract Pokemon name from the message (everything after the mention)
-        var content = message.Content;
-        var mentionPattern = $"<@{_client.CurrentUser.Id}>";
-        var mentionIndex = content.IndexOf(mentionPattern, StringComparison.OrdinalIgnoreCase);
-        
-        if (mentionIndex == -1)
+        foreach (var mention in new[] { $"<@{botId}>", $"<@!{botId}>" })
         {
-            // Try alternative mention format
-            mentionPattern = $"<@!{_client.CurrentUser.Id}>";
-            mentionIndex = content.IndexOf(mentionPattern, StringComparison.OrdinalIgnoreCase);
+            var index = message.Content.IndexOf(mention, StringComparison.Ordinal);
+            if (index == -1)
+                continue;
+
+            var guess = message.Content[(index + mention.Length)..].Trim();
+            return guess.Length == 0 ? null : guess;
         }
 
-        if (mentionIndex == -1)
+        return null;
+    }
+
+    /// <summary>
+    ///     Tries to catch an active spawn in the message's channel by name, for the message's author.
+    /// </summary>
+    /// <param name="message">The message that guessed the name.</param>
+    /// <param name="guess">The guessed Pokemon name.</param>
+    /// <param name="replyOnFailure">Whether to reply when the name matched but the catch failed.</param>
+    /// <returns>True when the guess matched an active spawn, whether or not the catch succeeded.</returns>
+    public async Task<bool> TryCatchAsync(SocketMessage message, string guess, bool replyOnFailure = true)
+    {
+        if (message.Guild is not { } guild)
             return false;
 
-        // Extract the potential Pokemon name after the mention
-        var afterMention = content[(mentionIndex + mentionPattern.Length)..].Trim();
-        if (string.IsNullOrEmpty(afterMention))
-            return false;
+        var channel = message.Channel;
+        var guessedName = guess.Trim().ToLower().Replace(" ", "-");
 
-        // Get active spawns in this channel from the new tracking system
-        var activeSpawnIds = await GetActiveSpawnsInChannel(channel.Id);
-        
-        foreach (var spawnMessageId in activeSpawnIds)
+        foreach (var spawnMessageId in await GetActiveSpawnsInChannel(channel.Id))
         {
-            // Get spawn info from tracking system
             var spawnInfo = await GetActiveSpawn(spawnMessageId);
             if (spawnInfo == null)
                 continue;
 
             var pokemonName = spawnInfo.Value.PokemonName;
-            var isShiny = spawnInfo.Value.IsShiny;
-            var legChance = spawnInfo.Value.LegendaryChance;
-            var ubChance = spawnInfo.Value.UltraBeastChance;
-
-            // Check if the mentioned Pokemon name matches
-            var validNames = GetCatchOptions(pokemonName);
-            var guessedName = afterMention.ToLower().Replace(" ", "-");
-            
-            if (!validNames.Contains(guessedName))
+            if (!GetCatchOptions(pokemonName).Contains(guessedName))
                 continue;
 
-            // Try to get the actual message to modify it later
-            IUserMessage? spawnMessage = null;
+            var result = await HandleCatchWithMessageCheck(
+                message.Author.Id,
+                guild.Id,
+                pokemonName,
+                spawnInfo.Value.IsShiny,
+                spawnInfo.Value.LegendaryChance,
+                spawnInfo.Value.UltraBeastChance,
+                spawnMessageId);
+
+            if (!result.Success)
+            {
+                if (replyOnFailure)
+                    await message.ReplyAsync(result.ResponseEmbed is null
+                            ? result.Message ?? "Something went wrong with the catch attempt."
+                            : null,
+                        result.ResponseEmbed is null ? null : [result.ResponseEmbed]);
+                return true;
+            }
+
+            await MarkSpawnAsCaught(spawnMessageId, message.Author.Id);
+            _ = _missionService.FirePokemonCaughtEvent(new CommandContext(_client, message));
+
+            if (result.ResponseEmbed != null)
+                await channel.SendMessageAsync(embeds: [result.ResponseEmbed]);
+            else if (!string.IsNullOrEmpty(result.Message))
+                await channel.SendMessageAsync(result.Message);
+
             try
             {
-                spawnMessage = await channel.GetMessageAsync(spawnMessageId) as IUserMessage;
+                await message.AddReactionAsync("✅");
             }
             catch
             {
-                // Message might have been deleted, continue with the catch anyway
+                // Ignore reaction errors
             }
 
-            // Attempt to catch the Pokemon using the same logic as modal catching
-            var result = await HandleCatchWithMessageCheck(
-                message.Author.Id,
-                channel.Guild.Id,
-                pokemonName,
-                isShiny,
-                legChance,
-                ubChance,
-                spawnMessageId);
-
-            // If successful, also mark in the new spawn tracking system
-            if (result.Success)
-            {
-                await MarkSpawnAsCaught(spawnMessageId, message.Author.Id);
-            }
-
-            // Send the catch result
-            if (result.Success)
-            {
-                if (result.ResponseEmbed != null)
-                {
-                    await message.Channel.SendMessageAsync(embed: result.ResponseEmbed);
-                }
-                else if (!string.IsNullOrEmpty(result.Message))
-                {
-                    await message.Channel.SendMessageAsync(result.Message);
-                }
-                
-                // Add reaction to the original catch message
-                try
-                {
-                    await message.AddReactionAsync(new Emoji("✅"));
-                }
-                catch
-                {
-                    // Ignore reaction errors
-                }
-
-                // Handle the spawn message if we found it
-                if (spawnMessage != null)
-                {
-                    if (result.ShouldDeleteSpawn)
-                    {
-                        await spawnMessage.DeleteAsync();
-                    }
-                    else
-                    {
-                        var originalEmbed = spawnMessage.Embeds.First().ToEmbedBuilder();
-                        originalEmbed.Title = "Caught!";
-                        await spawnMessage.ModifyAsync(m =>
-                        {
-                            m.Embed = originalEmbed.Build();
-                            m.Components = new ComponentBuilder().Build();
-                            m.Attachments = null;
-                        });
-
-                        if (result.ShouldPinSpawn)
-                        {
-                            var curUser = await channel.Guild.GetCurrentUserAsync();
-                            var perms = curUser.GetPermissions(channel);
-                            if (perms.ManageMessages)
-                                await spawnMessage.PinAsync();
-                        }
-                    }
-                }
-            }
-            else
-            {
-                // Send error message as reply
-                if (result.ResponseEmbed != null)
-                {
-                    await message.ReplyAsync(embed: result.ResponseEmbed);
-                }
-                else if (!string.IsNullOrEmpty(result.Message))
-                {
-                    await message.ReplyAsync(result.Message);
-                }
-                else
-                {
-                    await message.ReplyAsync("Something went wrong with the catch attempt.");
-                }
-            }
-
-            return true; // We processed a catch attempt
+            await UpdateCaughtSpawnAsync(channel.Id, spawnMessageId, result);
+            return true;
         }
 
-        return false; // No matching spawn found
+        return false;
+    }
+
+    /// <summary>
+    ///     Marks a caught spawn's message as caught, or deletes or pins it as the catch result asks.
+    /// </summary>
+    /// <param name="channelId">The spawn's channel.</param>
+    /// <param name="spawnMessageId">The spawn message.</param>
+    /// <param name="result">The result of the catch.</param>
+    private async Task UpdateCaughtSpawnAsync(ulong channelId, ulong spawnMessageId, CatchResult result)
+    {
+        try
+        {
+            if (await _client.Rest.GetMessageAsync(channelId, spawnMessageId) is not { } spawnMessage)
+                return;
+
+            if (result.ShouldDeleteSpawn)
+            {
+                await spawnMessage.DeleteAsync();
+                return;
+            }
+
+            await spawnMessage.ModifyAsync(embeds: [RetitleSpawnEmbed(spawnMessage, "Caught!")], attachments: []);
+
+            if (result.ShouldPinSpawn)
+                await spawnMessage.PinAsync();
+        }
+        catch (FluxerApiException ex)
+        {
+            Log.Debug(ex, "Could not update caught spawn {MessageId}", spawnMessageId);
+        }
+    }
+
+    /// <summary>
+    ///     Rebuilds a spawn message's embed with a new title and without its image.
+    /// </summary>
+    /// <param name="spawnMessage">The spawn message.</param>
+    /// <param name="title">The new title.</param>
+    private static EmbedRequest RetitleSpawnEmbed(Message spawnMessage, string title)
+    {
+        var embed = new EmbedBuilder().WithTitle(title);
+        if (spawnMessage.Embeds?.FirstOrDefault() is { } original)
+        {
+            if (original.Description is not null)
+                embed.WithDescription(original.Description);
+            if (original.Color is { } color)
+                embed.WithColor(color);
+        }
+
+        return embed.Build();
     }
 
     /// <summary>
@@ -548,7 +553,7 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="channel">The text channel where the vault spawns.</param>
     /// <param name="pokemonName">The name of the Pokemon to encode in the vault message.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    private async Task HandleVaultSpawn(ITextChannel channel, string? pokemonName)
+    private async Task HandleVaultSpawn(Channel channel, string? pokemonName)
     {
         if (_activeVaults.Contains(channel.Id))
             return;
@@ -559,50 +564,34 @@ public class SpawnService : INService, IReadyExecutor
         var giftWord = EncodePhrase(pokemonName, letterShift);
 
         var embed = new EmbedBuilder()
-            .WithTitle("🔒 A locked EeveeCore vault has been spotted!")
+            .WithTitle("🔒 A locked PokeFlux vault has been spotted!")
             .WithDescription(
-                $"`Decoding key:` ||{shiftInverted}||!\n# {giftWord}\n**Reply to the bots message with the pokemon name.**\nShift each letter up or down by the decoding key!\nBe the first decode and say the name to unlock the vault and see what its hiding!\n\n||`A B C D E F G H I J K L M N O P Q R S T U V W X Y Z`||")
+                $"`Decoding key:` ||{shiftInverted}||!\n# {giftWord}\n**Say the decoded pokemon name in this channel.**\nShift each letter up or down by the decoding key!\nBe the first decode and say the name to unlock the vault and see what its hiding!\n\n||`A B C D E F G H I J K L M N O P Q R S T U V W X Y Z`||")
             .WithColor(Color.Red);
 
-        // Check if vault image exists locally
-        var vaultImagePath = Path.Combine("data", "images", "EeveeCore_vault.png");
-        IUserMessage message;
-        FileStream vaultStream = null;
-        
-        try
-        {
-            if (File.Exists(vaultImagePath))
-            {
-                embed.WithImageUrl("attachment://vault.png");
-                vaultStream = new FileStream(vaultImagePath, FileMode.Open, FileAccess.Read);
-                var fileAttachment = new FileAttachment(vaultStream, "vault.png");
-                message = await channel.SendFileAsync(fileAttachment, embed: embed.Build());
-            }
-            else
-            {
-                message = await channel.SendMessageAsync(embed: embed.Build());
-            }
-        }
-        finally
-        {
-            // Dispose the stream after sending
-            vaultStream?.Dispose();
-        }
+        var attachments = new List<AttachmentRequest>();
+        SetImage(embed, Path.Combine("data", "images", "EeveeCore_vault.png"), "vault.png", attachments, false);
+
+        var message = await channel.SendMessageAsync(embeds: [embed.Build()], attachments: attachments);
         _activeVaults.Add(channel.Id);
 
         try
         {
-            var response = await channel.GetMessageAsync(message.Id);
-            if (response != null)
+            var answer = pokemonName?.ToLower().Replace(" ", "-");
+            var response = await _client.Gateway.MessageCreated.WaitAsync(
+                m => m.ChannelId == channel.Id && m.Author is { IsBot: false }
+                                               && m.Content.Trim().ToLower().Replace(" ", "-") == answer,
+                TimeSpan.FromMinutes(10));
+            if (response is null)
+                return;
+
+            var vaultReward = await HandleVaultReward(response);
+            if (vaultReward != null)
             {
-                var vaultReward = await HandleVaultReward(response, channel);
-                if (vaultReward != null)
-                {
-                    var rewardEmbed = new EmbedBuilder()
-                        .WithDescription(vaultReward)
-                        .Build();
-                    await message.ModifyAsync(x => x.Embed = rewardEmbed);
-                }
+                var rewardEmbed = new EmbedBuilder()
+                    .WithDescription(vaultReward)
+                    .Build();
+                await message.ModifyAsync(embeds: [rewardEmbed], attachments: []);
             }
         }
         finally
@@ -615,10 +604,9 @@ public class SpawnService : INService, IReadyExecutor
     ///     Handles the reward process for a vault event.
     ///     Determines the type of reward and processes it for the user.
     /// </summary>
-    /// <param name="message">The message containing the user's response.</param>
-    /// <param name="channel">The channel where the vault event occurred.</param>
+    /// <param name="message">The message that decoded the vault.</param>
     /// <returns>A string describing the reward.</returns>
-    private async Task<string> HandleVaultReward(IMessage message, ITextChannel channel)
+    private async Task<string?> HandleVaultReward(SocketMessage message)
     {
         await using var db = await _dbContextProvider.GetConnectionAsync();
         var rewardType = _random.NextDouble() switch
@@ -807,22 +795,15 @@ public class SpawnService : INService, IReadyExecutor
     ///     Gets the appropriate channel for spawning a Pokemon.
     ///     Handles redirect channels if configured in the guild settings.
     /// </summary>
+    /// <param name="guild">The server the spawn was triggered in.</param>
     /// <param name="channel">The original channel where the spawn was triggered.</param>
     /// <param name="config">The guild configuration.</param>
     /// <returns>The text channel where the Pokemon should spawn.</returns>
-    private async Task<ITextChannel?> GetSpawnChannel(ITextChannel channel, Guild config)
+    private Channel? GetSpawnChannel(SocketGuild guild, Channel channel, Guild config)
     {
-        if (config.Redirects?.Any() != true) return channel as ITextChannel;
+        if (config.Redirects?.Any() != true) return channel;
         var redirectId = config.Redirects[_random.Next(config.Redirects.Count)];
-        if (await channel.Guild.GetChannelAsync(redirectId) is not ITextChannel redirectChannel)
-            return null;
-
-        var user = await channel.Guild.GetUserAsync(_client.CurrentUser.Id);
-        var perms = user.GetPermissions(redirectChannel);
-        if (!perms.SendMessages || !perms.EmbedLinks)
-            return null;
-
-        return redirectChannel;
+        return guild.GetChannel(redirectId) is { Type: ChannelType.GuildText } redirectChannel ? redirectChannel : null;
     }
 
     /// <summary>
@@ -832,7 +813,7 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="channel">The channel to check.</param>
     /// <param name="config">The guild configuration.</param>
     /// <returns>True if spawns are allowed in the channel, false otherwise.</returns>
-    private static async Task<bool> ValidateChannel(ITextChannel channel, Guild config)
+    private static bool ValidateChannel(Channel channel, Guild config)
     {
         if (!config.EnableSpawnsAll && !config.EnabledChannels.Contains(channel.Id))
             return false;
@@ -899,7 +880,7 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="isShiny">Whether the Pokemon is shiny.</param>
     /// <param name="config">The guild configuration.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    private async Task CreateAndSendSpawnMessage(ITextChannel channel, string? pokemonName, bool isShiny, Guild config)
+    private async Task CreateAndSendSpawnMessage(Channel channel, string? pokemonName, bool isShiny, Guild config)
     {
         // Get form info from MongoDB for validation
         var formInfo = await _mongoDb.Forms
@@ -916,7 +897,7 @@ public class SpawnService : INService, IReadyExecutor
         var (_, imagePath) = await _pokemonService.GetPokemonFormInfo(pokemonName, isShiny);
         if (string.IsNullOrEmpty(imagePath)) return;
 
-        var shinyEmote = isShiny ? "<a:shiny:1057764628349853786>" : "";
+        var shinyEmote = isShiny ? Emojis.Shiny : "";
         var spawnMessage = SpawnMessages.Messages[_random.Next(SpawnMessages.Messages.Count)];
 
         // Calculate spawn chances ONCE
@@ -927,213 +908,64 @@ public class SpawnService : INService, IReadyExecutor
             .WithTitle(spawnMessage)
             .WithDescription($"{shinyEmote}This Pokémon's name starts with {pokemonName[0]}{shinyEmote}")
             .WithColor(new Color(_random.Next(256), _random.Next(256), _random.Next(256)))
-            .WithFooter("/explain spawns for basic info");
+            .WithFooter("Guess its name to catch it!");
 
-        // Check if the image file exists
-        if (!File.Exists(imagePath))
+        // Hosted names and the attached file name are generic so they do not reveal the Pokemon
+        var attachments = new List<AttachmentRequest>();
+        if (!SetImage(embed, imagePath, "spawn.png", attachments, config.SmallImages))
         {
             Log.Warning("Pokemon image not found at path: {ImagePath}", imagePath);
             embed.WithDescription($"{embed.Description}\n\n*[Image not available]*");
         }
+
+        if (config.ModalView)
+            embed.WithDescription($"{embed.Description}\nCatch it with `catch <name>`!");
+
+        var spawnMsg = await channel.SendMessageAsync(embeds: [embed.Build()], attachments: attachments);
+
+        await RegisterActiveSpawn(spawnMsg.Id, channel.Id, channel.GuildId ?? 0, pokemonName, isShiny, legChance,
+            ubChance);
+        _ = DespawnAfterAsync(spawnMsg, TimeSpan.FromMinutes(10));
+    }
+
+    private bool SetImage(EmbedBuilder embed, string? path, string fileName, List<AttachmentRequest> attachments,
+        bool thumbnail)
+    {
+        var url = _media.Get(path);
+        if (url is null)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                return false;
+            attachments.Add(new AttachmentRequest(File.OpenRead(path), fileName));
+            url = $"attachment://{fileName}";
+        }
+
+        if (thumbnail)
+            embed.WithThumbnailUrl(url);
         else
-        {
-            // Set image attachment filename - use generic name to avoid revealing Pokemon identity
-            var imageFileName = "spawn.png";
-            if (config.SmallImages)
-                embed.WithThumbnailUrl($"attachment://{imageFileName}");
-            else
-                embed.WithImageUrl($"attachment://{imageFileName}");
-        }
-
-        // Create spawn message with or without button
-        IUserMessage spawnMsg;
-        FileStream fileStream = null;
-        
-        try
-        {
-            if (File.Exists(imagePath))
-            {
-                fileStream = new FileStream(imagePath, FileMode.Open, FileAccess.Read);
-                // Use generic filename to not reveal Pokemon identity
-                var imageFileName = "spawn.png";
-                var fileAttachment = new FileAttachment(fileStream, imageFileName);
-
-                if (config.ModalView)
-                {
-                    var button = new ButtonBuilder()
-                        .WithLabel("Catch This Pokemon!")
-                        .WithCustomId($"catch:{pokemonName},{isShiny},{legChance},{ubChance}")
-                        .WithStyle(ButtonStyle.Primary);
-
-                    var component = new ComponentBuilder().WithButton(button);
-                    spawnMsg = await channel.SendFileAsync(fileAttachment, embed: embed.Build(), components: component.Build());
-                }
-                else
-                {
-                    spawnMsg = await channel.SendFileAsync(fileAttachment, embed: embed.Build());
-                    _ = HandleMessageCollector(channel, spawnMsg, pokemonName, isShiny, config, legChance,
-                        ubChance); // Pass the chances here too
-                }
-            }
-            else
-            {
-                if (config.ModalView)
-                {
-                    var button = new ButtonBuilder()
-                        .WithLabel("Catch This Pokemon!")
-                        .WithCustomId($"catch:{pokemonName},{isShiny},{legChance},{ubChance}")
-                        .WithStyle(ButtonStyle.Primary);
-
-                    var component = new ComponentBuilder().WithButton(button);
-                    spawnMsg = await channel.SendMessageAsync(embed: embed.Build(), components: component.Build());
-                }
-                else
-                {
-                    spawnMsg = await channel.SendMessageAsync(embed: embed.Build());
-                    _ = HandleMessageCollector(channel, spawnMsg, pokemonName, isShiny, config, legChance,
-                        ubChance); // Pass the chances here too
-                }
-            }
-            
-            // Register the active spawn for tracking
-            _ = RegisterActiveSpawn(spawnMsg.Id, channel.Id, channel.Guild.Id, pokemonName, isShiny, legChance, ubChance);
-        }
-        finally
-        {
-            // Dispose the stream after sending
-            fileStream?.Dispose();
-        }
+            embed.WithImageUrl(url);
+        return true;
     }
 
     /// <summary>
-    ///     Handles message collection for Pokemon catching.
-    ///     Monitors chat for messages containing the Pokemon's name.
-    ///     Uses Redis to prevent multiple catches of the same Pokemon.
+    ///     Marks a spawn as despawned when nobody caught it in time.
     /// </summary>
-    /// <param name="channel">The channel to monitor.</param>
     /// <param name="spawnMsg">The spawn message.</param>
-    /// <param name="pokemonName">The name of the spawned Pokemon.</param>
-    /// <param name="isShiny">Whether the Pokemon is shiny.</param>
-    /// <param name="config">The guild configuration.</param>
-    /// <param name="legChance">The legendary spawn chance value.</param>
-    /// <param name="ubChance">The Ultra Beast spawn chance value.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    private async Task HandleMessageCollector(ITextChannel channel, IUserMessage spawnMsg, string? pokemonName,
-        bool isShiny, Guild config, int legChance, int ubChance)
+    /// <param name="after">How long the spawn stays catchable.</param>
+    private async Task DespawnAfterAsync(Message spawnMsg, TimeSpan after)
     {
-        var catchOptions = GetCatchOptions(pokemonName);
-        var hasCaught = false;
+        await Task.Delay(after);
+        try
+        {
+            if (await IsPokemonAlreadyCaught(spawnMsg.Id))
+                return;
 
-        for (var i = 0; i < 12; i++) // 12 * 50 = 600 seconds (10 minutes)
-            try
-            {
-                var collected = await channel.GetMessagesAsync(50).FlattenAsync();
-                foreach (var message in collected)
-                {
-                    if (hasCaught) break;
-                    if (message.Author.IsBot) continue;
-
-                    var content = message.Content.ToLower().Replace(" ", "-");
-                    if (!catchOptions.Contains(content)) continue;
-
-                    // Get spawn info from new tracking system
-                    var spawnInfo = await GetActiveSpawn(spawnMsg.Id);
-                    if (spawnInfo == null)
-                        // Spawn no longer active (already caught or expired)
-                        break;
-
-                    // Try to mark as caught - this is atomic using the old Redis system for backward compatibility
-                    if (!await TryMarkPokemonAsCaught(spawnMsg.Id, message.Author.Id))
-                        // Another thread marked it as caught before we could
-                        break;
-
-                    // Mark spawn as caught in the new system
-                    await MarkSpawnAsCaught(spawnMsg.Id, message.Author.Id);
-
-                    // Process catch using info from spawn tracking
-                    var result = await HandleCatch(
-                        message.Author.Id,
-                        channel.Guild.Id,
-                        spawnInfo.Value.PokemonName,
-                        spawnInfo.Value.IsShiny,
-                        spawnInfo.Value.LegendaryChance,
-                        spawnInfo.Value.UltraBeastChance);
-
-                    if (!result.Success) continue;
-
-                    hasCaught = true;
-
-                    try
-                    {
-                        await message.AddReactionAsync(new Emoji("✅"));
-                    }
-                    catch
-                    {
-                        /* Ignore reaction errors */
-                    }
-
-                    if (result.ShouldDeleteSpawn)
-                    {
-                        await spawnMsg.DeleteAsync();
-                    }
-                    else
-                    {
-                        var originalEmbed = spawnMsg.Embeds.First().ToEmbedBuilder();
-                        originalEmbed.Title = "Caught!";
-                        await spawnMsg.ModifyAsync(m =>
-                        {
-                            m.Embed = originalEmbed.Build();
-                            m.Components = new ComponentBuilder().Build();
-                            m.Attachments = null;
-                        });
-
-                        if (result.ShouldPinSpawn)
-                        {
-                            var curUser = await channel.Guild.GetCurrentUserAsync();
-                            var perms = curUser.GetPermissions(channel);
-                            if (perms.ManageMessages)
-                                await spawnMsg.PinAsync();
-                        }
-                    }
-
-                    if (result.ResponseEmbed != null)
-                    {
-                        await channel.SendMessageAsync(embed: result.ResponseEmbed);
-                    }
-                    else if (!string.IsNullOrEmpty(result.Message))
-                    {
-                        await channel.SendMessageAsync(result.Message);
-                    }
-                }
-
-                if (hasCaught) break;
-                await Task.Delay(50000); // Wait 50 seconds before next collection
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Error in message collector for spawn");
-            }
-
-        // Timeout if no one caught it
-        if (!hasCaught)
-            try
-            {
-                // Make sure no one caught it while we were deciding to despawn
-                if (!await IsPokemonAlreadyCaught(spawnMsg.Id))
-                {
-                    var timeoutEmbed = spawnMsg.Embeds.First().ToEmbedBuilder();
-                    timeoutEmbed.Title = "Despawned!";
-                    await spawnMsg.ModifyAsync(m =>
-                    {
-                        m.Embed = timeoutEmbed.Build();
-                        m.Components = new ComponentBuilder().Build();
-                    });
-                }
-            }
-            catch
-            {
-                /* Ignore timeout message errors */
-            }
+            await spawnMsg.ModifyAsync(embeds: [RetitleSpawnEmbed(spawnMsg, "Despawned!")], attachments: []);
+        }
+        catch
+        {
+            /* Ignore timeout message errors */
+        }
     }
 
     /// <summary>
@@ -1278,7 +1110,7 @@ public class SpawnService : INService, IReadyExecutor
             2);
 
         var rewardMessages = new List<string>();
-        var shinyEmote = isShiny ? "<a:shiny:1057764628349853786>" : "";
+        var shinyEmote = isShiny ? Emojis.Shiny : "";
 
         rewardMessages.Add(
             $"{shinyEmote}Congratulations, you have caught a **{pokemonName}** `({ivPercent}% iv)`!{shinyEmote}");
@@ -1489,9 +1321,7 @@ public class SpawnService : INService, IReadyExecutor
             if (makeShadow)
             {
                 skin = "shadow";
-                // Log shadow creation
-                if (_client.GetChannel(1005737655025291334) is IMessageChannel channel)
-                    await channel.SendMessageAsync($"`{userId} - {pokemonName}`");
+                await _botLog.SendAsync($"Shadow: `{userId} - {pokemonName}`");
             }
         }
 
@@ -1620,7 +1450,7 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="setting">The setting to update.</param>
     /// <param name="value">The new value for the setting.</param>
     /// <returns>An embed with information about the update.</returns>
-    public async Task<Embed> UpdateGuildSetting(ulong guildId, string setting, string? value)
+    public async Task<EmbedRequest> UpdateGuildSetting(ulong guildId, string setting, string? value)
     {
         var update = setting.ToLower() switch
         {
@@ -1672,7 +1502,7 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="channelId">The Discord ID of the channel to update.</param>
     /// <param name="enable">Whether to enable or disable spawns in the channel.</param>
     /// <returns>An embed with information about the update.</returns>
-    public async Task<Embed> UpdateChannelSetting(ulong guildId, ulong channelId, bool enable)
+    public async Task<EmbedRequest> UpdateChannelSetting(ulong guildId, ulong channelId, bool enable)
     {
         // First check if the document exists
         var guild = await _mongoDb.Guilds.Find(g => g.GuildId == guildId).FirstOrDefaultAsync();
@@ -1733,7 +1563,7 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="channelId">The Discord ID of the channel to update.</param>
     /// <param name="add">Whether to add or remove the channel as a redirect.</param>
     /// <returns>An embed with information about the update.</returns>
-    public async Task<Embed> UpdateRedirectChannel(ulong guildId, ulong channelId, bool add)
+    public async Task<EmbedRequest> UpdateRedirectChannel(ulong guildId, ulong channelId, bool add)
     {
         // Ensure redirects field is initialized as an array if null
         await _mongoDb.Guilds.UpdateOneAsync(
@@ -1765,7 +1595,7 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="guildId">The Discord ID of the guild.</param>
     /// <param name="speed">The new spawn speed (1-20).</param>
     /// <returns>An embed with information about the update.</returns>
-    public async Task<Embed> UpdateSpawnSpeed(ulong guildId, int speed)
+    public async Task<EmbedRequest> UpdateSpawnSpeed(ulong guildId, int speed)
     {
         speed = Math.Max(1, Math.Min(20, speed));
 
@@ -1794,7 +1624,7 @@ public class SpawnService : INService, IReadyExecutor
     /// </summary>
     /// <param name="guildId">The Discord ID of the guild.</param>
     /// <returns>An embed containing the guild's spawn settings.</returns>
-    public async Task<Embed> GetGuildSettings(ulong guildId)
+    public async Task<EmbedRequest> GetGuildSettings(ulong guildId)
     {
         var guild = await _mongoDb.Guilds
             .Find(g => g.GuildId == guildId)
@@ -2334,8 +2164,8 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="ShouldPinSpawn">Whether the spawn message should be pinned.</param>
     public record CatchResult(
         bool Success,
-        string Message,
-        Embed ResponseEmbed,
+        string? Message,
+        EmbedRequest? ResponseEmbed,
         bool ShouldDeleteSpawn,
         bool ShouldPinSpawn);
 }

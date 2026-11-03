@@ -7,6 +7,7 @@ using Microsoft.IdentityModel.Tokens;
 using LinqToDB;
 using EeveeCore.Database.Linq.Models.Bot;
 using LinqToDB.Async;
+using User = EeveeCore.Database.Linq.Models.Bot.User;
 
 namespace EeveeCore.Services;
 

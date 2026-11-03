@@ -1,169 +1,96 @@
 using System.Net.Http.Headers;
-using Discord.Interactions;
-using Fergun.Interactive;
 
 namespace EeveeCore.Extensions;
 
 /// <summary>
-///     Most of the extension methods for Mewdeko.
+///     General extension methods for messages, channels and embeds.
 /// </summary>
 public static class Extensions
 {
     /// <summary>
-    ///     Sends a confirmation message asynchronously.
+    ///     Sends an embed with the OK color and the given description.
     /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the confirmation.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task SendConfirmAsync(this IDiscordInteraction interaction, string? message)
+    /// <param name="channel">The channel to send to.</param>
+    /// <param name="message">The description of the embed.</param>
+    public static Task<Message> SendConfirmAsync(this Channel channel, string? message) =>
+        channel.SendMessageAsync(embeds: [new EmbedBuilder().WithOkColor().WithDescription(message).Build()]);
+
+    /// <summary>
+    ///     Sends an embed with the error color and the given description.
+    /// </summary>
+    /// <param name="channel">The channel to send to.</param>
+    /// <param name="message">The description of the embed.</param>
+    public static Task<Message> SendErrorAsync(this Channel channel, string? message) =>
+        channel.SendMessageAsync(embeds: [new EmbedBuilder().WithErrorColor().WithDescription(message).Build()]);
+
+    /// <summary>
+    ///     Sends a direct message to a user.
+    /// </summary>
+    /// <param name="client">The Fluxer client.</param>
+    /// <param name="userId">The user to message.</param>
+    /// <param name="content">The message text.</param>
+    /// <param name="embeds">The embeds to send.</param>
+    public static async Task<Message> SendDirectMessageAsync(this FluxerClient client, ulong userId,
+        string? content = null, List<EmbedRequest>? embeds = null)
     {
-        return interaction.RespondAsync(embed: new EmbedBuilder().WithOkColor().WithDescription(message).Build());
+        var channel = await client.Rest.CreateDMChannelAsync(new CreatePrivateChannelRequest
+        {
+            RecipientId = userId
+        }).ConfigureAwait(false);
+        return await client.Rest.SendMessageAsync(channel.Id, content, embeds).ConfigureAwait(false);
     }
 
     /// <summary>
-    ///     Sends a confirmation message asynchronously with ephemeral visibility.
+    ///     Gets a user's username from the gateway cache, or from the API when it is not cached.
     /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the confirmation.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task SendEphemeralConfirmAsync(this IDiscordInteraction interaction, string message)
+    /// <param name="client">The Fluxer client.</param>
+    /// <param name="userId">The user's ID.</param>
+    /// <returns>The username, or null when the user cannot be found.</returns>
+    public static async Task<string?> GetUsernameAsync(this FluxerClient client, ulong userId)
     {
-        return interaction.RespondAsync(embed: new EmbedBuilder().WithOkColor().WithDescription(message).Build(),
-            ephemeral: true);
+        if (await client.Gateway.Cache.Users.GetAsync(userId).ConfigureAwait(false) is { } cached)
+            return cached.Username;
+
+        try
+        {
+            return (await client.Rest.GetUserAsync(userId).ConfigureAwait(false))?.Username;
+        }
+        catch (FluxerApiException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
-    ///     Sends an error message asynchronously.
+    ///     Sets the color of an embed.
     /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the error.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task SendErrorAsync(this IDiscordInteraction interaction, string? message)
-    {
-        return interaction.RespondAsync(embed: new EmbedBuilder().WithErrorColor().WithDescription(message).Build());
-    }
+    /// <param name="eb">The embed builder.</param>
+    /// <param name="color">The color to set.</param>
+    public static EmbedBuilder WithColor(this EmbedBuilder eb, Color color) => eb.WithColor((int)color.RawValue);
 
     /// <summary>
-    ///     Sends an error message asynchronously with ephemeral visibility.
+    ///     Sets the color of an embed from a 0xRRGGBB value.
     /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the error.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task SendEphemeralErrorAsync(this IDiscordInteraction interaction, string? message)
-    {
-        return interaction.RespondAsync(embed: new EmbedBuilder().WithErrorColor().WithDescription(message).Build(),
-            ephemeral: true);
-    }
+    /// <param name="eb">The embed builder.</param>
+    /// <param name="color">The color to set.</param>
+    public static EmbedBuilder WithColor(this EmbedBuilder eb, uint color) => eb.WithColor((int)color);
 
     /// <summary>
-    ///     Sends a confirmation follow-up message asynchronously.
+    ///     Sets the color of an embed to the OK color.
     /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the follow-up.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task<IUserMessage> SendConfirmFollowupAsync(this IDiscordInteraction interaction,
-        string message)
-    {
-        return interaction.FollowupAsync(embed: new EmbedBuilder().WithOkColor().WithDescription(message).Build());
-    }
-
-    /// <summary>
-    ///     Sends a confirmation follow-up message asynchronously with a custom component builder.
-    /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the follow-up.</param>
-    /// <param name="builder">Component builder for additional interaction components.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task<IUserMessage> SendConfirmFollowupAsync(this IDiscordInteraction interaction,
-        string message, ComponentBuilder builder)
-    {
-        return interaction.FollowupAsync(embed: new EmbedBuilder().WithOkColor().WithDescription(message).Build(),
-            components: builder.Build());
-    }
-
-    /// <summary>
-    ///     Sends an ephemeral follow-up confirmation message asynchronously.
-    /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the follow-up.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task<IUserMessage> SendEphemeralFollowupConfirmAsync(this IDiscordInteraction interaction,
-        string message)
-    {
-        return interaction
-            .FollowupAsync(embed: new EmbedBuilder().WithOkColor().WithDescription(message).Build(), ephemeral: true);
-    }
-
-    /// <summary>
-    ///     Sends a follow-up error message asynchronously.
-    /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the error.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task<IUserMessage> SendErrorFollowupAsync(this IDiscordInteraction interaction, string message)
-    {
-        return interaction.FollowupAsync(embed: new EmbedBuilder().WithErrorColor().WithDescription(message).Build());
-    }
-
-    /// <summary>
-    ///     Sends an ephemeral follow-up error message asynchronously.
-    /// </summary>
-    /// <param name="interaction">Discord interaction context.</param>
-    /// <param name="message">Message to include in the error.</param>
-    /// <returns>Task representing the asynchronous operation.</returns>
-    public static Task<IUserMessage> SendEphemeralFollowupErrorAsync(this IDiscordInteraction interaction,
-        string message)
-    {
-        return interaction.FollowupAsync(embed: new EmbedBuilder().WithErrorColor().WithDescription(message).Build(),
-            ephemeral: true);
-    }
-
-
-    /// <summary>
-    ///     Sets the color of an embed to OK color.
-    /// </summary>
-    /// <param name="eb">Embed builder to set the color for.</param>
-    /// <returns>Embed builder with the color set to OK color.</returns>
-    public static EmbedBuilder WithOkColor(this EmbedBuilder eb)
-    {
-        return eb.WithColor(EeveeCore.OkColor);
-    }
-
+    /// <param name="eb">The embed builder.</param>
+    public static EmbedBuilder WithOkColor(this EmbedBuilder eb) => eb.WithColor(EeveeCore.OkColor);
 
     /// <summary>
     ///     Sets the color of an embed to the error color.
     /// </summary>
-    /// <param name="eb">Embed builder to set the color for.</param>
-    /// <returns>Embed builder with the color set to the error color.</returns>
-    public static EmbedBuilder WithErrorColor(this EmbedBuilder eb)
-    {
-        return eb.WithColor(EeveeCore.ErrorColor);
-    }
+    /// <param name="eb">The embed builder.</param>
+    public static EmbedBuilder WithErrorColor(this EmbedBuilder eb) => eb.WithColor(EeveeCore.ErrorColor);
 
     /// <summary>
-    ///     Sets the color of a page builder to the OK color.
+    ///     Adds browser-like headers to a request.
     /// </summary>
-    /// <param name="eb">Page builder to set the color for.</param>
-    /// <returns>Page builder with the color set to the OK color.</returns>
-    public static PageBuilder WithOkColor(this PageBuilder eb)
-    {
-        return eb.WithColor(EeveeCore.OkColor);
-    }
-
-    /// <summary>
-    ///     Sets the color of a page builder to the error color.
-    /// </summary>
-    /// <param name="eb">Page builder to set the color for.</param>
-    /// <returns>Page builder with the color set to the error color.</returns>
-    public static PageBuilder WithErrorColor(this PageBuilder eb)
-    {
-        return eb.WithColor(EeveeCore.ErrorColor);
-    }
-
-    /// <summary>
-    ///     Adds fake headers to the HttpHeaders dictionary.
-    /// </summary>
-    /// <param name="dict">HttpHeaders dictionary to add headers to.</param>
+    /// <param name="dict">The headers to replace.</param>
     public static void AddFakeHeaders(this HttpHeaders dict)
     {
         dict.Clear();
@@ -173,11 +100,11 @@ public static class Extensions
     }
 
     /// <summary>
-    ///     Deletes a message after a specified number of seconds.
+    ///     Deletes a message after a number of seconds, ignoring failures.
     /// </summary>
-    /// <param name="msg">Message to delete.</param>
-    /// <param name="seconds">Number of seconds to wait before deleting.</param>
-    public static void DeleteAfter(this IUserMessage? msg, int seconds)
+    /// <param name="msg">The message to delete.</param>
+    /// <param name="seconds">How many seconds to wait first.</param>
+    public static void DeleteAfter(this Message? msg, int seconds)
     {
         if (msg is null) return;
 
@@ -196,23 +123,12 @@ public static class Extensions
     }
 
     /// <summary>
-    ///     Gets the top-level module of the given module.
+    ///     Gets the top-level module of a module.
     /// </summary>
-    /// <param name="module">Module to get the top-level module for.</param>
-    /// <returns>Top-level module of the given module.</returns>
+    /// <param name="module">The module.</param>
     public static ModuleInfo GetTopLevelModule(this ModuleInfo module)
     {
         while (module.Parent != null) module = module.Parent;
         return module;
-    }
-
-    /// <summary>
-    ///     Gets the roles associated with the specified user.
-    /// </summary>
-    /// <param name="user">User to get the roles for.</param>
-    /// <returns>Enumerable collection of roles associated with the user.</returns>
-    public static IEnumerable<IRole> GetRoles(this IGuildUser user)
-    {
-        return user.RoleIds.Select(r => user.Guild.GetRole(r)).Where(r => r != null);
     }
 }

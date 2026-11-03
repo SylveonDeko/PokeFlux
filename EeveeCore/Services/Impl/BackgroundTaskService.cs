@@ -192,24 +192,19 @@ public class BackgroundTaskService : BackgroundService, INService
             // Try to notify users (fire and forget)
             _ = Task.Run(async () =>
             {
-                var discordService = scope.ServiceProvider.GetService<DiscordShardedClient>();
-                if (discordService == null) return;
-                
+                var client = scope.ServiceProvider.GetRequiredService<FluxerClient>();
+
                 foreach (var honey in expiredHoneys)
                 {
                     try
                     {
-                        var user = await discordService.GetUserAsync(honey.OwnerId, CacheMode.AllowDownload, null);
-                        if (user != null)
-                        {
-                            var embed = new EmbedBuilder()
-                                .WithTitle($"Your {honey.Type} spread has expired!")
-                                .WithDescription($"Your {honey.Type} Spread in <#{honey.ChannelId}> has expired!\nSpread some more with `/spread`.")
-                                .WithColor(0xFFB6C1)
-                                .Build();
-                            
-                            await user.SendMessageAsync(embed: embed);
-                        }
+                        var embed = new EmbedBuilder()
+                            .WithTitle($"Your {honey.Type} spread has expired!")
+                            .WithDescription($"Your {honey.Type} spread in <#{honey.ChannelId}> has expired.\nSpread some more with the `spread` command.")
+                            .WithColor(0xFFB6C1)
+                            .Build();
+
+                        await client.SendDirectMessageAsync(honey.OwnerId, embeds: [embed]);
                     }
                     catch (Exception ex)
                     {

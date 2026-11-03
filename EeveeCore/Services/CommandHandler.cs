@@ -1,249 +1,173 @@
-﻿using System.Collections.Concurrent;
-using System.Text;
-using Discord.Commands;
-using Discord.Interactions;
-using Discord.Net;
+﻿using System.Diagnostics;
 using EeveeCore.Common.Collections;
-using Fergun.Interactive;
+using EeveeCore.Common.ModuleBehaviors;
 using Serilog;
-using ExecuteResult = Discord.Commands.ExecuteResult;
-using IResult = Discord.Interactions.IResult;
+using IResult = Fluxer.Net.Commands.IResult;
 
 namespace EeveeCore.Services;
 
 /// <summary>
-///     Handles command parsing and execution, integrating with various services to process Discord interactions and
-///     messages.
+///     Reads server messages for the server's prefix or a mention of the bot, and runs the text command they name.
 /// </summary>
 public class CommandHandler : INService
 {
     private const int GlobalCommandsCooldown = 750;
-    private readonly IDataCache _cache;
-    private readonly Timer _clearUsersOnShortCooldown;
-    private readonly DiscordShardedClient _client;
-    private readonly NonBlocking.ConcurrentDictionary<ulong, bool> _commandParseLock = new();
 
-    private readonly NonBlocking.ConcurrentDictionary<ulong, ConcurrentQueue<IUserMessage>> _commandParseQueue = new();
+    private readonly FluxerClient _client;
     private readonly CommandService _commands;
     private readonly GuildSettingsService _guildSettings;
-    private readonly InteractionService _interactions;
     private readonly ConcurrentHashSet<ulong> _usersOnShortCooldown = [];
-    private readonly InteractiveService _interactive;
+    private readonly Timer _clearUsersOnShortCooldown;
 
     /// <summary>
-    ///     Gets the IServiceProvider for the bot.
+    ///     Gets the service provider commands are run with.
     /// </summary>
     public readonly IServiceProvider Services;
 
     /// <summary>
     ///     Initializes a new instance of the <see cref="CommandHandler" /> class.
     /// </summary>
-    /// <param name="client">The Discord client.</param>
-    /// <param name="commands">The service for handling commands.</param>
-    /// <param name="guildSettings">The guild settings service.</param>
-    /// <param name="interactions">The service for handling interactions.</param>
-    /// <param name="services">The service provider for dependency injection.</param>
-    /// <param name="cache">The data cache service.</param>
-    /// <param name="eventHandler">The event handler for discord events.</param>
-    /// <param name="interactive">The interactive service for handling interactive components.</param>
-    public CommandHandler(
-        DiscordShardedClient client,
-        CommandService commands,
-        GuildSettingsService guildSettings,
-        InteractionService interactions,
-        IServiceProvider services,
-        IDataCache cache,
-        EventHandler eventHandler, InteractiveService interactive)
+    /// <param name="client">The Fluxer client.</param>
+    /// <param name="commands">The text command service.</param>
+    /// <param name="guildSettings">The guild settings service, for prefixes.</param>
+    /// <param name="services">The service provider commands are run with.</param>
+    public CommandHandler(FluxerClient client, CommandService commands, GuildSettingsService guildSettings,
+        IServiceProvider services)
     {
         _client = client;
         _commands = commands;
         _guildSettings = guildSettings;
-        _interactions = interactions;
         Services = services;
-        _cache = cache;
-        _interactive = interactive;
 
         _clearUsersOnShortCooldown = new Timer(_ => _usersOnShortCooldown.Clear(),
             null, GlobalCommandsCooldown, GlobalCommandsCooldown);
 
-        eventHandler.MessageReceived += HandleMessageAsync;
-        eventHandler.InteractionCreated += HandleInteractionAsync;
+        _client.Gateway.MessageCreated += HandleMessageAsync;
+        _commands.CommandExecuted += OnCommandFinishedAsync;
+    }
 
-        _interactions.SlashCommandExecuted += HandleSlashCommand;
+    private static async Task OnCommandFinishedAsync(CommandInfo? command, ICommandContext context, IResult result)
+    {
+        if (result is not ExecuteResult { Exception: { } exception }
+            || exception is FluxerApiException { ErrorCode: FluxerErrorCodes.MissingPermissions })
+            return;
+
+        Log.Warning(exception, "Command {Command} failed", command?.Name);
+        if (context is not CommandContext { Channel: { } channel })
+            return;
+
+        try
+        {
+            await channel.SendErrorAsync("Something went wrong running that command. Please try again.");
+        }
+        catch (FluxerApiException)
+        {
+        }
     }
 
     /// <summary>
-    ///     Runs when a command is executed.
+    ///     Raised after a command runs successfully.
     /// </summary>
-    public event Func<IUserMessage, CommandInfo, Task> CommandExecuted = delegate { return Task.CompletedTask; };
+    public event Func<SocketMessage, CommandInfo, Task> CommandExecuted = delegate { return Task.CompletedTask; };
 
     /// <summary>
-    ///     Runs when a command errored.
+    ///     Raised when a command fails, with the reason.
     /// </summary>
-    public event Func<CommandInfo, ITextChannel, string, IUser?, Task> CommandErrored = delegate
+    public event Func<CommandInfo?, Channel, string, User?, Task> CommandErrored = delegate
     {
         return Task.CompletedTask;
     };
 
     /// <summary>
-    ///     Runs the handle event found in HelpService.
+    ///     Raised for messages that do not start with the prefix or a mention of the bot.
     /// </summary>
-    public event Func<IUserMessage, Task> OnMessageNoTrigger = delegate { return Task.CompletedTask; };
+    public event Func<SocketMessage, Task> OnMessageNoTrigger = delegate { return Task.CompletedTask; };
 
-    private async Task HandleMessageAsync(IMessage msg)
+    private async Task HandleMessageAsync(SocketMessage msg)
     {
+        if (msg.Author is null || msg.Author.IsBot || msg.WebhookId is not null || msg.Guild is null)
+            return;
+
         try
         {
-            if (msg.Author.IsBot || msg is not SocketUserMessage usrMsg)
-                return;
-
-            AddCommandToParseQueue(usrMsg);
-            await ExecuteCommandsInChannelAsync(usrMsg.Channel.Id);
+            await TryRunCommandAsync(msg.Guild, msg);
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Error in CommandHandler");
-            if (ex.InnerException != null)
-                Log.Warning(ex.InnerException, "Inner Exception of the error in CommandHandler");
         }
     }
 
-    private void AddCommandToParseQueue(IUserMessage usrMsg)
+    private async Task TryRunCommandAsync(SocketGuild guild, SocketMessage msg)
     {
-        _commandParseQueue.AddOrUpdate(usrMsg.Channel.Id,
-            _ => new ConcurrentQueue<IUserMessage>([usrMsg]),
-            (_, queue) =>
-            {
-                queue.Enqueue(usrMsg);
-                return queue;
-            });
-    }
-
-    /// <summary>
-    ///     Executes a command in the given channel in the queue.
-    /// </summary>
-    /// <param name="channelId">The channel id o the channel to run a command in.</param>
-    /// <returns>Whether the run was successful.</returns>
-    public async Task<bool> ExecuteCommandsInChannelAsync(ulong channelId)
-    {
-        if (_commandParseLock.GetValueOrDefault(channelId) ||
-            _commandParseQueue.GetValueOrDefault(channelId)?.IsEmpty != false)
-            return false;
-
-        _commandParseLock[channelId] = true;
-        try
+        foreach (var behavior in Services.GetServices<IEarlyBehavior>().OrderBy(x => x.Priority))
         {
-            while (_commandParseQueue[channelId].TryDequeue(out var msg))
-                try
-                {
-                    var guild = (msg.Channel as IGuildChannel)?.Guild;
-                    await TryRunCommandAsync(guild, msg.Channel, msg);
-                }
-                catch (Exception e)
-                {
-                    Log.Error("Error occurred in command handler: {Error}", e);
-                }
-
-            _commandParseQueue[channelId] = new ConcurrentQueue<IUserMessage>();
-            return true;
+            if (await behavior.RunBehavior(_client, guild, msg).ConfigureAwait(false))
+                return;
         }
-        finally
+
+        var content = msg.Content ?? "";
+        foreach (var transformer in Services.GetServices<IInputTransformer>())
         {
-            _commandParseLock[channelId] = false;
+            var transformed = await transformer.TransformInput(guild, msg.Channel, msg.Author!, content)
+                .ConfigureAwait(false);
+            if (transformed == content) continue;
+            content = transformed;
+            break;
         }
-    }
 
-    private async Task TryRunCommandAsync(IGuild? guild, IChannel channel, IUserMessage usrMsg)
-    {
-        var execTime = Environment.TickCount;
-
-        // Get prefix for this guild
         var prefix = await _guildSettings.GetPrefix(guild);
-        if (prefix == null) return;
-
-        var prefixLength = GetPrefixLength(usrMsg.Content, prefix);
+        var prefixLength = GetPrefixLength(content, prefix);
         if (prefixLength == 0)
         {
-            await OnMessageNoTrigger(usrMsg);
+            await OnMessageNoTrigger(msg);
+            foreach (var executor in Services.GetServices<ILateExecutor>())
+                await executor.LateExecute(_client, guild, msg).ConfigureAwait(false);
             return;
         }
 
-        var messageContent = usrMsg.Content;
-
-        var (success, error, command) = await ExecuteCommandAsync(
-            new CommandContext(_client, usrMsg),
-            messageContent,
-            prefixLength,
-            MultiMatchHandling.Best);
-
-        execTime = Environment.TickCount - execTime;
-
-        /*// Update stats if command was recognized
-        if (command != null && guild != null)
-        {
-            await using var db = await _db.GetContextAsync();
-            var guildConfig = await _guildSettings.GetGuildConfigAsync(guild.Id);
-            if (!guildConfig.StatsOptOut)
-            {
-                var commandStats = new CommandStats
-                {
-                    ChannelId = channel.Id,
-                    GuildId = guild.Id,
-                    IsSlash = false,
-                    NameOrId = command.Name,
-                    UserId = usrMsg.Author.Id,
-                    Module = command.Module.Name
-                };
-                await db.CommandStats.AddAsync(commandStats);
-                await db.SaveChangesAsync();
-            }
-        }*/
+        var started = Stopwatch.GetTimestamp();
+        var (success, error, command) =
+            await ExecuteCommandAsync(new CommandContext(_client, msg), content, prefixLength);
+        var elapsed = (int)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
 
         if (success)
         {
-            await LogCommandExecution(usrMsg, channel as ITextChannel, command, true, execTime);
-            await CommandExecuted(usrMsg, command);
+            LogCommand(msg, command, true, elapsed);
+            await CommandExecuted(msg, command!);
             return;
         }
 
-        if (!string.IsNullOrEmpty(error))
-        {
-            await LogCommandExecution(usrMsg, channel as ITextChannel, command, false, execTime, error);
-            if (guild != null) await CommandErrored(command, channel as ITextChannel, error, usrMsg.Author);
-        }
+        if (string.IsNullOrEmpty(error))
+            return;
+
+        LogCommand(msg, command, false, elapsed, error);
+        await CommandErrored(command, msg.Channel, error, msg.Author);
     }
 
-    private async Task<(bool Success, string Error, CommandInfo? Info)> ExecuteCommandAsync(
-        CommandContext context,
-        string input,
-        int argPos,
-        MultiMatchHandling multiMatchHandling = MultiMatchHandling.Exception)
+    private async Task<(bool Success, string? Error, CommandInfo? Info)> ExecuteCommandAsync(
+        CommandContext context, string input, int argPos)
     {
         var searchResult = _commands.Search(context, input[argPos..]);
         if (!searchResult.IsSuccess)
-            return (false, searchResult.ErrorReason, null);
+            return (false, null, null);
 
         var commands = searchResult.Commands;
         var preconditionResults = await Task.WhenAll(commands.Select(async match =>
-            (match, await match.Command.CheckPreconditionsAsync(context, Services))));
+            (match, await match.Command.CheckPreconditionsAsync(context, Services).ConfigureAwait(false))));
 
-        var successfulPreconditions = preconditionResults
-            .Where(x => x.Item2.IsSuccess)
-            .ToArray();
-
+        var successfulPreconditions = preconditionResults.Where(x => x.Item2.IsSuccess).ToArray();
         if (successfulPreconditions.Length == 0)
         {
             var bestCandidate = preconditionResults
                 .OrderByDescending(x => x.match.Command.Priority)
-                .FirstOrDefault(x => !x.Item2.IsSuccess);
+                .First(x => !x.Item2.IsSuccess);
             return (false, bestCandidate.Item2.ErrorReason, commands[0].Command);
         }
 
         var parseResults = await Task.WhenAll(successfulPreconditions.Select(async x =>
-        {
-            var parseResult = await x.match.ParseAsync(context, searchResult, x.Item2, Services);
-            return (x.match, parseResult);
-        }));
+            (x.match, parseResult: await x.match.ParseAsync(context, searchResult, x.Item2, Services)
+                .ConfigureAwait(false))));
 
         var successfulParses = parseResults
             .Where(x => x.parseResult.IsSuccess)
@@ -253,171 +177,52 @@ public class CommandHandler : INService
 
         if (successfulParses.Length == 0)
         {
-            var bestMatch = parseResults.FirstOrDefault(x => !x.parseResult.IsSuccess);
+            var bestMatch = parseResults.First(x => !x.parseResult.IsSuccess);
             return (false, bestMatch.parseResult.ErrorReason, commands[0].Command);
         }
 
-        var cmd = successfulParses[0].match.Command;
+        var chosen = successfulParses[0];
+        var command = chosen.match.Command;
 
         if (!_usersOnShortCooldown.Add(context.User.Id))
-            return (false, "You are on cooldown.", cmd);
+            return (false, null, command);
 
-        var chosenOverload = successfulParses[0];
-        var result = await chosenOverload.match.ExecuteAsync(context, chosenOverload.parseResult, Services);
-
-        if (result is ExecuteResult execResult)
+        foreach (var blocker in Services.GetServices<ILateBlocker>().OrderBy(x => x.Priority))
         {
-            if (execResult.Exception != null &&
-                execResult.Exception is not HttpException { DiscordCode: DiscordErrorCode.InsufficientPermissions })
-                Log.Warning(execResult.Exception, "Command execution error");
-            return (execResult.IsSuccess, execResult.ErrorReason, cmd);
+            if (await blocker.TryBlockLate(_client, context, command.Module.GetTopLevelModule().Name, command)
+                    .ConfigureAwait(false))
+                return (false, null, command);
         }
 
-        return (result.IsSuccess, result.ErrorReason, cmd);
+        var result = await chosen.match.ExecuteAsync(context, chosen.parseResult, Services).ConfigureAwait(false);
+        return (result.IsSuccess, result.ErrorReason, command);
     }
 
-    private async Task LogCommandExecution(
-        IMessage msg,
-        ITextChannel? channel,
-        CommandInfo? commandInfo,
-        bool success,
-        int executionTime,
-        string? errorMessage = null)
+    private static void LogCommand(SocketMessage msg, CommandInfo? command, bool success, int elapsedMs,
+        string? error = null)
     {
-        var logBuilder = new StringBuilder()
-            .AppendLine(success ? "Command Executed" : "Command Errored")
-            .AppendLine($"User: {msg.Author} [{msg.Author.Id}]")
-            .AppendLine($"Server: {(channel == null ? "PRIVATE" : $"{channel.Guild.Name} [{channel.Guild.Id}]")}")
-            .AppendLine($"Channel: {(channel == null ? "PRIVATE" : $"{channel.Name} [{channel.Id}]")}")
-            .AppendLine($"Message: {msg.Content}")
-            .AppendLine($"Time: {executionTime}ms");
-
-        if (!success && !string.IsNullOrEmpty(errorMessage))
-            logBuilder.AppendLine($"Error: {errorMessage}");
-
         if (success)
-            Log.Information(logBuilder.ToString());
-        else
-            Log.Warning(logBuilder.ToString());
-
-        var embed = new EmbedBuilder()
-            .WithColor(success ? EeveeCore.OkColor : EeveeCore.ErrorColor)
-            .WithTitle(success ? "Command Executed" : "Command Errored")
-            .AddField("User", $"{msg.Author} [{msg.Author.Id}]")
-            .AddField("Guild", channel == null ? "PRIVATE" : $"{channel.Guild.Name} [{channel.Guild.Id}]")
-            .AddField("Channel", channel == null ? "PRIVATE" : $"{channel.Name} [{channel.Id}]")
-            .AddField("Message", msg.Content[..Math.Min(msg.Content.Length, 1000)])
-            .AddField("Time", $"{executionTime}ms");
-
-        if (!success && !string.IsNullOrEmpty(errorMessage))
-            embed.AddField("Error", errorMessage);
-
-        if (commandInfo != null)
-            embed.AddField("Command", $"{commandInfo.Module.Name} | {commandInfo.Name}");
-
-        /*// Log to command log channel if configured
-        if (channel?.Guild != null)
         {
-            var guildConfig = await _guildSettings.GetGuildConfigAsync(channel.Guild.Id);
-            if (guildConfig.CommandLogChannel != 0)
-            {
-                try
-                {
-                    var logChannel = await channel.Guild.GetTextChannelAsync(guildConfig.CommandLogChannel);
-                    if (logChannel != null)
-                        await logChannel.SendMessageAsync(embed: embed.Build());
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "Failed to log command to guild log channel");
-                }
-            }
-        }*/
-    }
-
-    private async Task HandleInteractionAsync(SocketInteraction interaction)
-    {
-        if (_interactive.IsManaged(interaction))
-            return;
-
-        try
-        {
-            var ctx = new ShardedInteractionContext(_client, interaction);
-            await _interactions.ExecuteCommandAsync(ctx, Services);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error executing interaction");
-
-            if (interaction.Type == InteractionType.ApplicationCommand)
-                await interaction.RespondAsync(
-                    "Sorry, something went wrong with this command.",
-                    ephemeral: true);
-        }
-    }
-
-    private async Task HandleSlashCommand(SlashCommandInfo commandInfo, IInteractionContext context, IResult result)
-    {
-        if (!result.IsSuccess)
-        {
-            await context.Interaction.RespondAsync(
-                $"Command failed: {result.ErrorReason}",
-                ephemeral: true);
-
-            Log.Warning(
-                "Slash Command Error\n" +
-                $"User: {context.User} [{context.User.Id}]\n" +
-                $"Guild: {context.Guild?.Name ?? "PRIVATE"} [{context.Guild?.Id}]\n" +
-                $"Channel: {context.Channel.Name} [{context.Channel.Id}]\n" +
-                $"Command: {commandInfo.Name}\n" +
-                $"Error: {result.ErrorReason}\n" +
-                $"Error Reason: {result.Error.GetValueOrDefault()}");
+            Log.Information("Command {Module}/{Command} by {UserId} in {GuildId}/{ChannelId} took {Elapsed}ms",
+                command?.Module.Name, command?.Name, msg.Author?.Id, msg.Guild?.Id, msg.ChannelId, elapsedMs);
             return;
         }
 
-        // Log successful command execution
-        Log.Information(
-            "Slash Command Executed\n" +
-            $"User: {context.User} [{context.User.Id}]\n" +
-            $"Guild: {context.Guild?.Name ?? "PRIVATE"} [{context.Guild?.Id}]\n" +
-            $"Channel: {context.Channel.Name} [{context.Channel.Id}]\n" +
-            $"Command: {commandInfo.Name}");
-
-        /*// Update command stats if enabled
-        if (context.Guild != null)
-        {
-            var config = await _guildSettings.GetGuildConfigAsync(context.Guild.Id);
-            if (!config.StatsOptOut)
-            {
-                await using var dbContext = await _db.GetContextAsync();
-                await dbContext.CommandStats.AddAsync(new CommandStats
-                {
-                    ChannelId = context.Channel.Id,
-                    GuildId = context.Guild.Id,
-                    IsSlash = true,
-                    Module = commandInfo.Module.Name,
-                    NameOrId = commandInfo.Name,
-                    UserId = context.User.Id
-                });
-                await dbContext.SaveChangesAsync();
-            }
-        }*/
+        Log.Warning("Command {Module}/{Command} by {UserId} in {GuildId}/{ChannelId} failed after {Elapsed}ms: {Error}",
+            command?.Module.Name, command?.Name, msg.Author?.Id, msg.Guild?.Id, msg.ChannelId, elapsedMs, error);
     }
 
     private int GetPrefixLength(string content, string prefix)
     {
-        if (content.StartsWith(prefix, StringComparison.InvariantCulture))
+        if (!string.IsNullOrEmpty(prefix) && content.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return prefix.Length;
 
-        var mentions = new[]
-        {
-            _client.CurrentUser.Mention,
-            $"<@{_client.CurrentUser.Id}>",
-            $"<@!{_client.CurrentUser.Id}>"
-        };
+        if (_client.Gateway.CurrentUser is not { } me)
+            return 0;
 
-        return (from mention in mentions
-            where content.StartsWith(mention + " ", StringComparison.InvariantCulture)
-            select mention.Length + 1).FirstOrDefault();
+        return new[] { $"<@{me.Id}>", $"<@!{me.Id}>" }
+            .Where(mention => content.StartsWith(mention + " ", StringComparison.Ordinal))
+            .Select(mention => mention.Length + 1)
+            .FirstOrDefault();
     }
 }

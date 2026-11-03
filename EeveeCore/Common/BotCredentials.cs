@@ -25,6 +25,7 @@ public class BotCredentials : IBotCredentials
         Token = config[nameof(Token)]
                 ?? throw new ArgumentNullException(nameof(Token), "Bot token must be provided in config");
         DefaultPrefix = config[nameof(DefaultPrefix)] ?? "";
+        FluxerInstanceUrl = config[nameof(FluxerInstanceUrl)];
 
         DebugGuildId = ulong.TryParse(config[nameof(DebugGuildId)], out var devGuild)
             ? devGuild
@@ -34,9 +35,30 @@ public class BotCredentials : IBotCredentials
             ? joinLog
             : 0;
 
+        LogChannelId = ulong.TryParse(config[nameof(LogChannelId)], out var botLog)
+            ? botLog
+            : 0;
+
+        CdnBaseUrl = config[nameof(CdnBaseUrl)]?.TrimEnd('/');
+        CdnKey = config[nameof(CdnKey)];
+
+        StartLogChannelId = ulong.TryParse(config[nameof(StartLogChannelId)], out var startLog)
+            ? startLog
+            : 0;
+
+        VoucherChannelId = ulong.TryParse(config[nameof(VoucherChannelId)], out var vouchers)
+            ? vouchers
+            : 0;
+
         OwnerIds =
         [
             ..config.GetSection(nameof(OwnerIds)).GetChildren()
+                .Select(c => ulong.Parse(c.Value))
+        ];
+
+        VoucherManagerIds =
+        [
+            ..config.GetSection(nameof(VoucherManagerIds)).GetChildren()
                 .Select(c => ulong.Parse(c.Value))
         ];
 
@@ -77,6 +99,11 @@ public class BotCredentials : IBotCredentials
     ///     Gets the JWT secret key for token signing and validation.
     /// </summary>
     public string JwtSecret { get; private set; } = null!;
+
+    /// <summary>
+    ///     Gets the address of a self-hosted Fluxer instance to connect to, or null for fluxer.app.
+    /// </summary>
+    public string? FluxerInstanceUrl { get; }
     
     /// <summary>
     ///     Gets the Discord client ID for OAuth authentication.
@@ -102,6 +129,37 @@ public class BotCredentials : IBotCredentials
     ///     Gets the channel ID where guild join notifications are sent.
     /// </summary>
     public ulong GuildJoinsChannelId { get; }
+
+    /// <summary>
+    ///     Gets the channel ID where registrations, trades, errors and other bot events are logged, or 0 to only
+    ///     write them to the console log.
+    /// </summary>
+    public ulong LogChannelId { get; }
+
+    /// <summary>
+    ///     Gets the base URL the images in <c>data/</c> are hosted at, or null to upload them with each message.
+    /// </summary>
+    public string? CdnBaseUrl { get; }
+
+    /// <summary>
+    ///     Gets the secret that hosted image names are derived from, so names do not reveal the image.
+    /// </summary>
+    public string? CdnKey { get; }
+
+    /// <summary>
+    ///     Gets the channel ID where new player registrations are logged, or 0 to use the log channel.
+    /// </summary>
+    public ulong StartLogChannelId { get; }
+
+    /// <summary>
+    ///     Gets the channel ID where voucher requests are posted, or 0 when vouchers are off.
+    /// </summary>
+    public ulong VoucherChannelId { get; }
+
+    /// <summary>
+    ///     Gets the IDs of the users who can update voucher requests, besides the owners.
+    /// </summary>
+    public ImmutableArray<ulong> VoucherManagerIds { get; }
 
     /// <summary>
     ///     Gets a value indicating whether the bot is running in debug mode.
@@ -187,6 +245,12 @@ public interface IBotCredentials
     ///     Gets the channel ID where guild join notifications are sent.
     /// </summary>
     ulong GuildJoinsChannelId { get; }
+
+    /// <summary>
+    ///     Gets the channel ID where registrations, trades, errors and other bot events are logged, or 0 to only
+    ///     write them to the console log.
+    /// </summary>
+    ulong LogChannelId { get; }
 
     /// <summary>
     ///     Gets a value indicating whether the bot is running in debug mode.

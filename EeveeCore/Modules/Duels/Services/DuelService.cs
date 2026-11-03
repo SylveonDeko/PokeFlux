@@ -22,7 +22,6 @@ public class DuelService : INService
     /// </summary>
     private readonly Dictionary<(ulong, ulong), Battle> _activeBattles = new();
 
-    private readonly DiscordShardedClient _client;
     private readonly LinqToDbConnectionProvider _db;
     private readonly IMongoService _mongoService;
     private readonly RedisCache _redis;
@@ -34,17 +33,14 @@ public class DuelService : INService
     /// </summary>
     /// <param name="mongoService">The MongoDB service for accessing Pokémon data.</param>
     /// <param name="db">The database context provider for Entity Framework operations.</param>
-    /// <param name="client">The Discord client for user and channel interactions.</param>
     /// <param name="redis">The Redis cache for cooldown and battle state persistence.</param>
     public DuelService(
         IMongoService mongoService,
         LinqToDbConnectionProvider db,
-        DiscordShardedClient client,
         RedisCache redis)
     {
         _mongoService = mongoService;
         _db = db;
-        _client = client;
         _redis = redis;
 
         // Initialize Redis cooldown storage
@@ -91,13 +87,13 @@ public class DuelService : INService
     ///     Retrieves a user's Pokémon party from the database and converts it to DuelPokemon objects.
     ///     Creates a MemberTrainer with the party and sets up owner references.
     /// </summary>
-    /// <param name="userId">The Discord ID of the user.</param>
-    /// <param name="ctx">The interaction context for Discord operations.</param>
+    /// <param name="userId">The ID of the user.</param>
+    /// <param name="username">The user's name, shown in the battle.</param>
     /// <returns>
     ///     A task representing the asynchronous operation that returns a list of DuelPokemon objects.
     ///     Returns an empty list if the user has no party or an error occurs.
     /// </returns>
-    public async Task<List<DuelPokemon>> GetUserPokemonParty(ulong userId, IInteractionContext ctx)
+    public async Task<List<DuelPokemon>> GetUserPokemonParty(ulong userId, string username)
     {
         var duelPokemon = new List<DuelPokemon>();
 
@@ -138,17 +134,14 @@ public class DuelService : INService
             foreach (var pokemon in partyPokemon)
             {
                 // Use the factory method to create a DuelPokemon object
-                var duelPoke = await DuelPokemon.Create(ctx, pokemon, _mongoService);
+                var duelPoke = await DuelPokemon.Create(pokemon, _mongoService);
                 if (duelPoke != null) duelPokemon.Add(duelPoke);
             }
 
             // Create a MemberTrainer to be the owner of these Pokémon
             if (duelPokemon.Any())
             {
-                var trainer = new MemberTrainer(
-                    _client.GetUser(userId),
-                    duelPokemon
-                );
+                var trainer = new MemberTrainer(userId, username, duelPokemon);
 
                 // Set the owner reference for each Pokémon
                 foreach (var pokemon in duelPokemon) pokemon.Owner = trainer;

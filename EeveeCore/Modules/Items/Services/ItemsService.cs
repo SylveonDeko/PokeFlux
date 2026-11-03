@@ -188,7 +188,7 @@ public class ItemsService(
     ///     Transfers an item from the user's selected Pokémon to another Pokémon in their collection.
     /// </summary>
     /// <param name="userId">The Discord ID of the user.</param>
-    /// <param name="pokemonNumber">The actual ID of the target Pokémon.</param>
+    /// <param name="pokemonNumber">The target Pokémon's number in the user's list.</param>
     /// <returns>A CommandResult containing the operation result message.</returns>
     public async Task<CommandResult> Transfer(ulong userId, ulong pokemonNumber)
     {
@@ -197,18 +197,28 @@ public class ItemsService(
 
         await using var db = await dbContextProvider.GetConnectionAsync();
 
-        // Find the target Pokemon directly by its ID
-        var targetPokemon = await db.UserPokemon
-            .FirstOrDefaultAsync(p => p.Id == pokemonNumber && p.Owner == userId);
+        var selectedId = await db.Users.Where(u => u.UserId == userId).Select(u => u.Selected).FirstOrDefaultAsync();
+        var targetId = pokemonNumber == 0
+            ? null
+            : await db.UserPokemonOwnerships
+                .Where(o => o.UserId == userId && o.Position == pokemonNumber - 1)
+                .Select(o => (ulong?)o.PokemonId)
+                .FirstOrDefaultAsync();
+        var targetPokemon = targetId is null
+            ? null
+            : await db.UserPokemon.FirstOrDefaultAsync(p => p.Id == targetId);
 
         if (targetPokemon == null)
             return new CommandResult { Message = "You do not have that Pokemon!" };
+
+        if (targetPokemon.Id == selectedId)
+            return new CommandResult { Message = "That is the Pokemon already holding the item!" };
 
         if (targetPokemon.HeldItem.ToLower() != "none")
             return new CommandResult { Message = "That Pokemon is already holding an item" };
 
         // Remove item from source Pokemon
-        await db.UserPokemon.Where(p => p.Id == pokemonNumber)
+        await db.UserPokemon.Where(p => p.Id == selectedId)
             .Set(p => p.HeldItem, "None")
             .UpdateAsync();
 
@@ -438,9 +448,8 @@ public class ItemsService(
     /// </summary>
     /// <param name="userId">The Discord ID of the user.</param>
     /// <param name="itemName">The name of the item to apply.</param>
-    /// <param name="channel">The Discord channel for sending messages.</param>
     /// <returns>A CommandResult containing the operation result message.</returns>
-    public async Task<CommandResult> Apply(ulong userId, string itemName, IMessageChannel channel)
+    public async Task<CommandResult> Apply(ulong userId, string itemName)
     {
         itemName = string.Join("-", itemName.Split()).ToLower();
 
@@ -1149,7 +1158,7 @@ public class ItemsService(
         /// <summary>
         ///     Gets the embed to display to the user, if any.
         /// </summary>
-        public Embed Embed { get; init; }
+        public EmbedRequest? Embed { get; init; }
 
         /// <summary>
         ///     Gets a value indicating whether the message should be ephemeral (only visible to the command user).

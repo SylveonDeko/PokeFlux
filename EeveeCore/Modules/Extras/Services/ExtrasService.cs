@@ -10,6 +10,8 @@ namespace EeveeCore.Modules.Extras.Services;
 public class ExtrasService : INService
 {
     private readonly IMongoService _mongoService;
+    private readonly SemaphoreSlim _namesLock = new(1, 1);
+    private List<string>? _pokemonNames;
 
     /// <summary>
     ///     Initializes a new instance of the <see cref="ExtrasService" /> class.
@@ -52,6 +54,77 @@ public class ExtrasService : INService
             return null;
 
         return moves.Moves.OrderBy(m => m).ToList();
+    }
+
+    /// <summary>
+    ///     Gets the identifiers of every Pokémon, loaded once from the Pokémon files.
+    /// </summary>
+    /// <returns>The lowercase identifiers.</returns>
+    public async Task<IReadOnlyList<string>> GetPokemonNames()
+    {
+        if (_pokemonNames is not null)
+            return _pokemonNames;
+
+        await _namesLock.WaitAsync();
+        try
+        {
+            if (_pokemonNames is null)
+            {
+                var files = await _mongoService.PFile.Find(_ => true).ToListAsync();
+                _pokemonNames = files
+                    .Where(f => !string.IsNullOrEmpty(f.Identifier))
+                    .Select(f => f.Identifier.ToLower())
+                    .Distinct()
+                    .ToList();
+            }
+
+            return _pokemonNames;
+        }
+        finally
+        {
+            _namesLock.Release();
+        }
+    }
+
+    /// <summary>
+    ///     Finds the option closest to what a player typed.
+    /// </summary>
+    /// <param name="input">What the player typed.</param>
+    /// <param name="options">The valid options.</param>
+    /// <returns>The closest option, or null when there are none.</returns>
+    public static string? FindClosest(string input, IEnumerable<string> options)
+    {
+        var lowered = input.ToLower();
+        return options
+            .Select(o => (Option: o, Distance: lowered.LevenshteinDistance(o.ToLower())))
+            .OrderBy(x => x.Distance)
+            .Select(x => x.Option)
+            .FirstOrDefault();
+    }
+
+    /// <summary>
+    ///     Builds a progress bar from the bar emojis.
+    /// </summary>
+    /// <param name="value">The current value.</param>
+    /// <param name="max">The value of a full bar.</param>
+    /// <param name="length">The number of pieces.</param>
+    /// <returns>The bar.</returns>
+    public static string ProgressBar(double value, double max, int length = 10)
+    {
+        var filled = max <= 0 ? 0 : (int)Math.Clamp(Math.Floor(value / max * length), 0, length);
+        var bar = new System.Text.StringBuilder();
+        for (var i = 0; i < length; i++)
+        {
+            var full = i < filled;
+            if (i == 0)
+                bar.Append(full ? Emojis.Bar.Start : Emojis.Bar.EmptyStart);
+            else if (i == length - 1)
+                bar.Append(full ? Emojis.Bar.End : Emojis.Bar.EmptyEnd);
+            else
+                bar.Append(full ? Emojis.Bar.Middle : Emojis.Bar.EmptyMiddle);
+        }
+
+        return bar.ToString();
     }
 
     /// <summary>
@@ -101,15 +174,15 @@ public class ExtrasService : INService
         {
             [true] = new()
             {
-                ["left"] = "<:bar_e1:1059717853714055268>",
-                ["center"] = "<:bar_e2:1059717860651434024>",
-                ["right"] = "<:bar_e3:1059717856595558402>"
+                ["left"] = Emojis.Bar.Start,
+                ["center"] = Emojis.Bar.Middle,
+                ["right"] = Emojis.Bar.End
             },
             [false] = new()
             {
-                ["left"] = "<:bar1:1059670478123442197>",
-                ["center"] = "<:bar2:1059670474046574692>",
-                ["right"] = "<:bar3:1059670475481030699>"
+                ["left"] = Emojis.Bar.EmptyStart,
+                ["center"] = Emojis.Bar.EmptyMiddle,
+                ["right"] = Emojis.Bar.EmptyEnd
             }
         };
 

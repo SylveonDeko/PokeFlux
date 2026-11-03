@@ -1,5 +1,8 @@
 ﻿using System.Runtime.CompilerServices;
+using System.Threading.Channels;
+using Channel = System.Threading.Channels.Channel;
 using EeveeCore.Database.Models.Mongo.Discord;
+using Guild = EeveeCore.Database.Models.Mongo.Discord.Guild;
 using EeveeCore.Services.Impl;
 using MongoDB.Driver;
 using Serilog;
@@ -60,7 +63,7 @@ public class GuildSettingsService : IAsyncDisposable
     ///     The guild's custom prefix if set, otherwise the default bot prefix.
     ///     Returns default prefix if guild is null.
     /// </returns>
-    public async Task<string> GetPrefix(IGuild? guild)
+    public async Task<string> GetPrefix(SocketGuild? guild)
     {
         if (guild is null)
             return _creds.DefaultPrefix;
@@ -84,7 +87,7 @@ public class GuildSettingsService : IAsyncDisposable
     /// <param name="prefix">The new prefix to set.</param>
     /// <returns>The newly set prefix.</returns>
     /// <exception cref="ArgumentNullException">Thrown when either guild or prefix is null.</exception>
-    public async Task<string> SetPrefix(IGuild guild, string prefix)
+    public async Task<string> SetPrefix(SocketGuild guild, string prefix)
     {
         ArgumentNullException.ThrowIfNull(guild);
         ArgumentNullException.ThrowIfNull(prefix);

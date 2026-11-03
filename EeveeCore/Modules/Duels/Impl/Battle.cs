@@ -1,5 +1,4 @@
 using EeveeCore.Database.Models.Mongo.Pokemon;
-using EeveeCore.Modules.Duels.Extensions;
 using EeveeCore.Modules.Duels.Services;
 using EeveeCore.Modules.Duels.Utils;
 using EeveeCore.Services.Impl;
@@ -21,16 +20,16 @@ public class Battle
     ///     Initializes a new instance of the Battle class.
     ///     Sets up the battle environment, trainers, and their Pokémon.
     /// </summary>
-    /// <param name="context">The interaction context for this battle.</param>
+    /// <param name="reactions">The reaction prompts players pick their actions with.</param>
     /// <param name="channel">The message channel where battle messages will be sent.</param>
     /// <param name="trainer1">The first trainer in the battle.</param>
     /// <param name="trainer2">The second trainer in the battle.</param>
     /// <param name="mongoService">The MongoDB service for accessing game data.</param>
     /// <param name="inverseBattle">Whether this is an inverse battle where type effectiveness is reversed.</param>
-    public Battle(IInteractionContext context, IMessageChannel channel, Trainer? trainer1, Trainer? trainer2,
+    public Battle(DuelReactions reactions, Channel channel, Trainer? trainer1, Trainer? trainer2,
         IMongoService mongoService, bool inverseBattle = false)
     {
-        Context = context;
+        Reactions = reactions;
         Channel = channel;
         Trainer1 = trainer1;
         Trainer2 = trainer2;
@@ -57,14 +56,14 @@ public class Battle
     }
 
     /// <summary>
-    ///     Gets or sets the interaction context for this battle.
+    ///     Gets the reaction prompts players pick their actions with.
     /// </summary>
-    public IInteractionContext Context { get; private set; }
+    public DuelReactions Reactions { get; }
 
     /// <summary>
     ///     Gets the message channel where battle messages will be sent.
     /// </summary>
-    public IMessageChannel Channel { get; }
+    public Channel Channel { get; }
 
     /// <summary>
     ///     Gets the first trainer in the battle.
@@ -149,42 +148,36 @@ public class Battle
     public string Msg { get; set; }
 
     /// <summary>
-    ///     Generates and sends the main battle message with the UI.
-    ///     Creates an embed with the battle image and interaction buttons.
+    ///     Sends the turn message: the battle image and each player's moves and options, with reactions to pick
+    ///     them, and starts listening for the players' picks.
     /// </summary>
     /// <param name="renderer">The renderer used to generate the battle image.</param>
     /// <returns>The sent message for later reference.</returns>
-    public async Task<IUserMessage> GenerateMainBattleMessage(DuelRenderer renderer)
+    public async Task<Message> GenerateMainBattleMessage(DuelRenderer renderer)
     {
-        // Create embed for battle
         var embed = new EmbedBuilder()
             .WithTitle($"Battle between {Trainer1.Name} and {Trainer2.Name}")
             .WithColor(new Color(255, 182, 193))
-            .WithFooter("Who Wins!?")
+            .WithFooter("React or type a move number or name, swap, mega or forfeit")
             .WithImageUrl("attachment://battle.png");
 
-        // Using local BattleRenderer instead of HTTP service
+        foreach (var (trainer, opponent) in new[] { (Trainer1, Trainer2), (Trainer2, Trainer1) })
+        {
+            if (!trainer.IsHuman())
+                continue;
+            var (name, value) = DuelReactions.ActionsField(trainer, opponent, this);
+            embed.AddField(name, value, true);
+        }
+
         using var battleImage = await renderer.GenerateBattleImage(this);
-        using var memoryStream = new MemoryStream();
+        var memoryStream = new MemoryStream();
         battleImage.Encode(SKEncodedImageFormat.Png, 100).SaveTo(memoryStream);
         memoryStream.Position = 0;
 
-        // Create button for viewing actions
-        var components = new ComponentBuilder()
-            .WithButton("View your actions", "battle:actions")
-            .Build();
-
-        // Update battle interaction turn
-        this.SetCurrentInteractionTurn(Turn);
-
-        // Create the file to send
-        var fileAttachment = new FileAttachment(memoryStream, "battle.png");
-
-        // Send the message with embed, file attachment, and components
-        return await Channel.SendFileAsync(
-            fileAttachment,
-            embed: embed.Build(),
-            components: components);
+        var message = await Channel.SendMessageAsync(embeds: [embed.Build()],
+            attachments: [new AttachmentRequest(memoryStream, "battle.png")]);
+        _ = Reactions.RunTurnAsync(this, message);
+        return message;
     }
 
     /// <summary>
@@ -705,7 +698,7 @@ public class Battle
             return;
 
         var page = "";
-        var pages = new List<Embed>();
+        var pages = new List<EmbedRequest>();
         var baseEmbed = new EmbedBuilder().WithColor(new Color(255, 182, 193));
         var rawLines = Msg.Trim().Split('\n');
 
@@ -732,7 +725,7 @@ public class Battle
             pages.Add(embed.Build());
         }
 
-        foreach (var embedPage in pages) await Channel.SendMessageAsync(embed: embedPage);
+        foreach (var embedPage in pages) await Channel.SendMessageAsync(embeds: [embedPage]);
 
         Msg = ""; // Clear the message after sending
     }
@@ -753,56 +746,29 @@ public class Battle
 
         if (swapper.IsHuman())
         {
-            // Cast to MemberTrainer to get access to the Discord user ID
-            if (swapper is not MemberTrainer)
+            if (await Reactions.PickSwapAsync(this, swapper, otherTrainer, midTurn) is not { } slot)
             {
-                Msg += $"{swapper.Name} is not properly set up as a member trainer, {otherTrainer.Name} wins!\n";
+                Msg += $"{swapper.Name} did not select a poke, {otherTrainer.Name} wins!\n";
                 return otherTrainer;
             }
 
-            // Set the current swap turn and mid-turn flag for component handlers to check
-            this.SetCurrentSwapTurn(Turn);
-            this.SetCurrentMidTurn(midTurn);
-
-            // Build component buttons for each Pokemon in the party
-            var components = new ComponentBuilder();
-            var validSwaps = swapper.ValidSwaps(otherTrainer.CurrentPokemon, this, midTurn);
-
-            for (var i = 0; i < swapper.Party.Count; i++)
-            {
-                var pokemon = swapper.Party[i];
-                // Sanitize the name for button display
-                var sanitizedName = PokemonNameSanitizer.SanitizeDisplayName(pokemon.Name, 15);
-
-                components.WithButton(
-                    $"{sanitizedName} | {pokemon.Hp}hp",
-                    $"battle:mid_swap:{i}",
-                    ButtonStyle.Secondary,
-                    disabled: !validSwaps.Contains(i),
-                    row: i / 2);
-            }
-
-            // Send the message with Pokemon options
-            await Channel.SendMessageAsync(
-                $"{swapper.Name}, pick a pokemon to swap to!",
-                components: components.Build());
+            swapper.SwitchPoke(slot, midTurn);
+            swapper.Event.TrySetResult(true);
         }
         else
         {
             // NPC trainers use their own swap logic
             ((NPCTrainer)swapper).Swap(otherTrainer.CurrentPokemon, this, midTurn);
-        }
 
-        try
-        {
-            // Wait for the trainer to make a selection (via ComponentInteraction)
-            // The timeout is handled by the WaitAsync method
-            await swapper.Event.Task.WaitAsync(TimeSpan.FromSeconds(60));
-        }
-        catch (TimeoutException)
-        {
-            Msg += $"{swapper.Name} did not select a poke, {otherTrainer.Name} wins!\n";
-            return otherTrainer;
+            try
+            {
+                await swapper.Event.Task.WaitAsync(TimeSpan.FromSeconds(60));
+            }
+            catch (TimeoutException)
+            {
+                Msg += $"{swapper.Name} did not select a poke, {otherTrainer.Name} wins!\n";
+                return otherTrainer;
+            }
         }
 
         // Check if a Pokemon was actually selected

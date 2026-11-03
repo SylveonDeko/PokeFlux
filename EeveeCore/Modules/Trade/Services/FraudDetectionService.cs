@@ -16,7 +16,6 @@ public class FraudDetectionService : INService
 {
     private readonly LinqToDbConnectionProvider _dbProvider;
     private readonly IDataCache _cache;
-    private readonly DiscordShardedClient _discordClient;
 
     #region Constants and Thresholds
 
@@ -42,9 +41,6 @@ public class FraudDetectionService : INService
     private const int NewAccountThreshold = 7;
     private const int SuspiciousAccountThreshold = 30;
 
-    // Admin notification channel
-    private const ulong AdminChannelId = 1004571710323957830;
-
     #endregion
 
     #region In-Memory Caches
@@ -59,12 +55,10 @@ public class FraudDetectionService : INService
     /// </summary>
     public FraudDetectionService(
         LinqToDbConnectionProvider dbProvider,
-        IDataCache cache,
-        DiscordShardedClient discordClient)
+        IDataCache cache)
     {
         _dbProvider = dbProvider;
         _cache = cache;
-        _discordClient = discordClient;
     }
 
     #region Main Analysis Entry Point

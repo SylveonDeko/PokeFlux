@@ -67,29 +67,10 @@ public enum TokenType
 public static class TokenTypeExtensions
 {
     /// <summary>
-    ///     Dictionary mapping token types to their Discord emoji representations.
+    ///     Dictionary mapping token types to their emojis.
     /// </summary>
-    private static readonly Dictionary<TokenType, string> TokenEmojis = new()
-    {
-        { TokenType.Dark, "<:dark:1041101608504795156>" },
-        { TokenType.Bug, "<:bug:1041101600384630824>" },
-        { TokenType.Ground, "<:ground:1041101623147114536>" },
-        { TokenType.Fighting, "<:fighting:1041101614456524800>" },
-        { TokenType.Steel, "<:steel:1041101633699991623>" },
-        { TokenType.Electric, "<:electric:1041101610912338011>" },
-        { TokenType.Grass, "<:grass:1041101621536501792>" },
-        { TokenType.Fairy, "<:fairy:1041101612728455200>" },
-        { TokenType.Water, "<:water:1041101635633557576>" },
-        { TokenType.Rock, "<:rock:1041101632122925207>" },
-        { TokenType.Flying, "<:flying:1041101618034249868>" },
-        { TokenType.Psychic, "<:psychic:1041101629920915528>" },
-        { TokenType.Normal, "<:normal:1041101626645155930>" },
-        { TokenType.Dragon, "<:dragon:1041101609784049664>" },
-        { TokenType.Fire, "<:fire:1041101616008396953>" },
-        { TokenType.Ghost, "<:ghost:1041101619422560256>" },
-        { TokenType.Ice, "<:ice:1041101624749334609>" },
-        { TokenType.Poison, "<:poison:1041101628259975259>" }
-    };
+    private static readonly Dictionary<TokenType, string> TokenEmojis =
+        Enum.GetValues<TokenType>().ToDictionary(t => t, t => Emojis.Type(t.ToString()));
 
     /// <summary>
     ///     Gets the Discord emoji representation for the specified token type.
