@@ -68,6 +68,11 @@ public class SpawnService : INService, IReadyExecutor
     private readonly MediaUrls _media;
 
     /// <summary>
+    ///     The bot credentials, for the default prefix.
+    /// </summary>
+    private readonly BotCredentials _credentials;
+
+    /// <summary>
     ///     Provider for database contexts.
     /// </summary>
     private readonly LinqToDbConnectionProvider _dbContextProvider;
@@ -123,6 +128,7 @@ public class SpawnService : INService, IReadyExecutor
     /// <param name="cache">Cache service for temporary data.</param>
     /// <param name="achievementService">Service for tracking achievements and milestones.</param>
     /// <param name="missionService">Service for handling mission-related operations.</param>
+    /// <param name="credentials">The bot credentials, for the default prefix.</param>
     public SpawnService(
         FluxerClient client,
         BotLog botLog,
@@ -132,9 +138,11 @@ public class SpawnService : INService, IReadyExecutor
         LinqToDbConnectionProvider dbContextProvider,
         IDataCache cache,
         AchievementService achievementService,
-        MissionService missionService)
+        MissionService missionService,
+        BotCredentials credentials)
     {
         _client = client;
+        _credentials = credentials;
         _botLog = botLog;
         _media = media;
         _mongoDb = mongoDb;
@@ -916,7 +924,10 @@ public class SpawnService : INService, IReadyExecutor
         }
 
         if (config.ModalView)
-            embed.WithDescription($"{embed.Description}\nCatch it with `catch <name>`!");
+        {
+            var prefix = string.IsNullOrWhiteSpace(config.Prefix) ? _credentials.DefaultPrefix : config.Prefix;
+            embed.WithDescription($"{embed.Description}\nCatch it with `{prefix}catch <name>`!");
+        }
 
         var spawnMsg = await channel.SendMessageAsync(embeds: [embed.Build()], attachments: attachments);
 
