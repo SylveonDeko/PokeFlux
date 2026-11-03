@@ -151,6 +151,27 @@ public class SpawnModule(BotCredentials credentials) : EeveeModule<SpawnService>
     }
 
     /// <summary>
+    ///     Adds a channel to the spawn redirects, or removes it when it is already one.
+    /// </summary>
+    /// <param name="channel">The channel to add or remove.</param>
+    [Command("redirect")]
+    [Summary("Add a channel that spawns are redirected to, or remove it when it already is one.")]
+    [RequireUserPermission(GuildPermission.ManageGuild)]
+    [Priority(-1)]
+    public async Task Redirect(Channel channel)
+    {
+        if (channel.GuildId != ctx.Guild!.Id)
+        {
+            await ErrorAsync("That channel is not in this server.");
+            return;
+        }
+
+        var config = await Service.GetGuildConfig(ctx.Guild.Id);
+        var add = config.Redirects?.Contains(channel.Id) != true;
+        await SendEmbedAsync(() => Service.UpdateRedirectChannel(ctx.Guild.Id, channel.Id, add));
+    }
+
+    /// <summary>
     ///     Sets how often Pokémon spawn in this server.
     /// </summary>
     /// <param name="speed">From 1 to 20.</param>
