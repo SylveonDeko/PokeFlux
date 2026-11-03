@@ -230,7 +230,8 @@ public class HatcheryService(
     }
 
     /// <summary>
-    ///     Converts an egg to a Pokemon when it hatches.
+    ///     Converts an egg to a Pokemon when it hatches and moves it to the end of the owner's collection, so it is
+    ///     their newest Pokemon.
     /// </summary>
     /// <param name="pokemon">The pokemon record to hatch.</param>
     /// <returns>The hatched Pokemon.</returns>
@@ -238,15 +239,28 @@ public class HatcheryService(
     {
         try
         {
-            // The egg is already a Pokemon record, just update its Counter to 0
-            // and mark it as hatched by removing the Counter
             await using var db = await dbContext.GetConnectionAsync();
+            await using var transaction = await db.BeginTransactionAsync();
+
             await db.UserPokemon
                 .Where(p => p.Id == pokemon.Id)
                 .Set(p => p.Counter, 0)
+                .Set(p => p.Timestamp, DateTime.UtcNow)
                 .UpdateAsync();
 
-            // Return the Pokemon (already have the data)
+            if (pokemon.Owner is { } owner)
+            {
+                var lastPosition = await db.UserPokemonOwnerships
+                    .Where(o => o.UserId == owner)
+                    .MaxAsync(o => (ulong?)o.Position) ?? 0;
+
+                await db.UserPokemonOwnerships
+                    .Where(o => o.UserId == owner && o.PokemonId == pokemon.Id && o.Position < lastPosition)
+                    .Set(o => o.Position, lastPosition + 1)
+                    .UpdateAsync();
+            }
+
+            await transaction.CommitAsync();
             return pokemon;
         }
         catch (Exception ex)
