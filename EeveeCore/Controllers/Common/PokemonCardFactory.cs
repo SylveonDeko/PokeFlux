@@ -183,7 +183,8 @@ public sealed class PokemonCardFactory(
             url = null;
         }
 
-        _sprites[key] = url;
+        if (url is not null)
+            _sprites[key] = url;
         return url;
     }
 
