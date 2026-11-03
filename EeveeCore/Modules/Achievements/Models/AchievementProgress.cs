@@ -180,3 +180,28 @@ public class LoyaltyTier
     /// </summary>
     public int MonthlyBonus { get; set; }
 }
+
+/// <summary>
+///     A trainer's value for one achievement.
+/// </summary>
+public class AchievementScore
+{
+    /// <summary>
+    ///     The trainer's user ID.
+    /// </summary>
+    public ulong UserId { get; init; }
+
+    /// <summary>
+    ///     The achievement's value.
+    /// </summary>
+    public long Value { get; init; }
+}
+
+/// <summary>
+///     A row of an achievement leaderboard.
+/// </summary>
+/// <param name="Rank">The trainer's rank.</param>
+/// <param name="UserId">The trainer's user ID.</param>
+/// <param name="Name">The trainer's nickname, or null when they have none.</param>
+/// <param name="Value">The achievement's value.</param>
+public record AchievementLeaderboardEntry(int Rank, ulong UserId, string? Name, long Value);

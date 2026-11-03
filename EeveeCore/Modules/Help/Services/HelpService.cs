@@ -79,7 +79,7 @@ public class HelpService : INService
     {
         var lines = AllCommands(category)
             .GroupBy(c => c.Aliases[0])
-            .Select(g => $"`{prefix}{g.Key}`" + (g.First().Summary is { Length: > 0 } s ? $" {s}" : ""));
+            .Select(g => $"`{prefix}{g.Key}`" + (g.First().Summary is { Length: > 0 } s ? $" {s.Replace("{prefix}", prefix)}" : ""));
         var description = string.Join("\n", lines);
 
         return new EmbedBuilder()
@@ -99,7 +99,7 @@ public class HelpService : INService
         var command = overloads[0];
         var embed = new EmbedBuilder()
             .WithTitle($"{prefix}{command.Aliases[0]}")
-            .WithDescription(command.Summary is { Length: > 0 } summary ? summary : "No description.")
+            .WithDescription(command.Summary is { Length: > 0 } summary ? summary.Replace("{prefix}", prefix) : "No description.")
             .AddField("Usage", string.Join("\n", overloads.Select(o => $"`{Usage(o, prefix)}`")))
             .WithOkColor();
 

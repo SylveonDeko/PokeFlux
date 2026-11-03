@@ -143,7 +143,7 @@ public class ShopModule : EeveeModule<ShopService>
     /// </summary>
     /// <param name="query">The search text, optionally with <c>type:</c> and <c>max:</c> filters.</param>
     [Command("shop search")]
-    [Summary("Search the shop. Add type:<type> or max:<price> to filter, for example `shop search boost type:fire max:20000`.")]
+    [Summary("Search the shop. Filter with `type:<type>` or `max:<price>`, for example `{prefix}shop search boost type:fire max:20000`.")]
     public async Task Search([Remainder] string query)
     {
         var prefix = await GetPrefixAsync();
@@ -352,7 +352,7 @@ public class ShopModule : EeveeModule<ShopService>
     /// <param name="input">The item's name, optionally followed by an amount.</param>
     [Command("shop buy")]
     [Alias("buy", "items buy")]
-    [Summary("Buy an item from the shop, for example `shop buy fire stone` or `shop buy protein 5`.")]
+    [Summary("Buy an item from the shop, for example `{prefix}shop buy protein 5`.")]
     [Priority(-1)]
     public async Task Buy([Remainder] string input)
     {

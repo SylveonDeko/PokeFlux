@@ -15,6 +15,7 @@ namespace EeveeCore.Modules.Achievements;
 [Name("Achievements")]
 public class AchievementsModule : EeveeModule<AchievementService>
 {
+    private const int LeaderboardSize = 10;
     private static readonly string[] Categories = AchievementService.Categories;
 
     /// <summary>
@@ -120,13 +121,38 @@ public class AchievementsModule : EeveeModule<AchievementService>
         if (await FindAchievementAsync(achievement) is not { } key)
             return;
 
-        var embed = new EmbedBuilder()
-            .WithTitle($"🏆 {AchievementConstants.AchievementDisplayNames.GetValueOrDefault(key, key)} Leaderboard")
-            .WithDescription("Leaderboard functionality coming soon!")
-            .WithColor(AchievementConstants.GoldTierColor);
+        try
+        {
+            var entries = await Service.GetLeaderboardAsync(key, LeaderboardSize);
 
-        await SendAsync(embed: embed);
+            var embed = new EmbedBuilder()
+                .WithTitle($"🏆 {AchievementConstants.AchievementDisplayNames.GetValueOrDefault(key, key)} Leaderboard")
+                .WithColor(AchievementConstants.GoldTierColor)
+                .WithDescription(entries.Count == 0
+                    ? "No trainers have made progress on this achievement yet."
+                    : string.Join("\n", entries.Select(e =>
+                        $"{RankLabel(e.Rank)} {(e.Name is null ? "*Hidden trainer*" : $"**{e.Name}**")}: {e.Value:N0}")));
+
+            if (entries.All(e => e.UserId != ctx.User.Id)
+                && await Service.GetLeaderboardRankAsync(key, ctx.User.Id) is { } mine)
+                embed.WithFooter($"Your rank: #{mine.Rank:N0} with {mine.Value:N0}");
+
+            await SendAsync(embed: embed);
+        }
+        catch (Exception e)
+        {
+            Log.Error(e, "Error in achievement leaderboard command for achievement {Achievement}", key);
+            await ErrorAsync("An error occurred while retrieving the leaderboard.");
+        }
     }
+
+    private static string RankLabel(int rank) => rank switch
+    {
+        1 => "🥇",
+        2 => "🥈",
+        3 => "🥉",
+        _ => $"`#{rank}`"
+    };
 
     private async Task ViewAsync(string? category, User targetUser)
     {

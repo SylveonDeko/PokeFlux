@@ -19,7 +19,7 @@ public partial class PokemonModule
         /// </summary>
         /// <param name="formName">The form to transform to.</param>
         [Command("form")]
-        [Summary("Transform your selected Pokémon to a specific form. Usage: `pokemon forms form <form>`")]
+        [Summary("Transform your selected Pokémon to a specific form.")]
         public async Task TransformForm([Remainder] string formName)
         {
             if (string.IsNullOrWhiteSpace(formName))
@@ -42,7 +42,7 @@ public partial class PokemonModule
         ///     Resets the selected Pokémon to its base form.
         /// </summary>
         [Command("deform")]
-        [Summary("Reset your selected Pokémon to its base form. Usage: `pokemon forms deform`")]
+        [Summary("Reset your selected Pokémon to its base form.")]
         public async Task Deform()
         {
             var result = await Service.DeformPokemonAsync(ctx.User.Id);
@@ -59,7 +59,7 @@ public partial class PokemonModule
         /// <param name="fusionType">white, black, ice or shadow.</param>
         /// <param name="number">The number of the Pokémon to fuse with.</param>
         [Command("fuse")]
-        [Summary("Fuse compatible Pokémon together. Usage: `pokemon forms fuse <type> <number>`\n" +
+        [Summary("Fuse compatible Pokémon together.\n" +
                  "Types: `white` (Kyurem + Reshiram), `black` (Kyurem + Zekrom), " +
                  "`ice` (Calyrex + Glastrier), `shadow` (Calyrex + Spectrier).")]
         public async Task Fuse(string fusionType, long number)
@@ -83,7 +83,7 @@ public partial class PokemonModule
         /// </summary>
         /// <param name="number">The number of the Lunala.</param>
         [Command("lunarize")]
-        [Summary("Fuse Necrozma with Lunala to create Dawn Wings form. Usage: `pokemon forms lunarize <lunala number>`")]
+        [Summary("Fuse Necrozma with one of your Lunala to create Dawn Wings form.")]
         public async Task Lunarize(long number)
         {
             if (!await CheckNumberAsync(number))
@@ -98,7 +98,7 @@ public partial class PokemonModule
         /// </summary>
         /// <param name="number">The number of the Solgaleo.</param>
         [Command("solarize")]
-        [Summary("Fuse Necrozma with Solgaleo to create Dusk Mane form. Usage: `pokemon forms solarize <solgaleo number>`")]
+        [Summary("Fuse Necrozma with one of your Solgaleo to create Dusk Mane form.")]
         public async Task Solarize(long number)
         {
             if (!await CheckNumberAsync(number))
@@ -112,7 +112,7 @@ public partial class PokemonModule
         ///     Mega evolves the selected Pokémon.
         /// </summary>
         [Command("mega")]
-        [Summary("Mega evolve your selected Pokémon. Usage: `pokemon forms mega`")]
+        [Summary("Mega evolve your selected Pokémon.")]
         public async Task Mega() =>
             await CongratulateAsync(await Service.MegaEvolveAsync(ctx.User.Id), "Congratulations!!!", Color.Red, true);
 
@@ -120,7 +120,7 @@ public partial class PokemonModule
         ///     Mega evolves the selected Pokémon to its X form.
         /// </summary>
         [Command("megax")]
-        [Summary("Mega evolve your selected Pokémon to X form. Usage: `pokemon forms megax`")]
+        [Summary("Mega evolve your selected Pokémon to X form.")]
         public async Task MegaX() =>
             await CongratulateAsync(await Service.MegaEvolveXAsync(ctx.User.Id), "Congratulations!!!", Color.Red, true);
 
@@ -128,7 +128,7 @@ public partial class PokemonModule
         ///     Mega evolves the selected Pokémon to its Y form.
         /// </summary>
         [Command("megay")]
-        [Summary("Mega evolve your selected Pokémon to Y form. Usage: `pokemon forms megay`")]
+        [Summary("Mega evolve your selected Pokémon to Y form.")]
         public async Task MegaY() =>
             await CongratulateAsync(await Service.MegaEvolveYAsync(ctx.User.Id), "Congratulations!!!", Color.Red, true);
 
@@ -136,7 +136,7 @@ public partial class PokemonModule
         ///     Returns a mega Pokémon to its base form.
         /// </summary>
         [Command("unmega")]
-        [Summary("Devolve your mega Pokémon back to base form. Usage: `pokemon forms unmega`")]
+        [Summary("Devolve your mega Pokémon back to base form.")]
         public async Task Unmega() =>
             await CongratulateAsync(await Service.MegaDevolveAsync(ctx.User.Id), "Devolution Complete!", Color.Green,
                 true);

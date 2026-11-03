@@ -1099,6 +1099,9 @@ public class PokemonService(
         return ownership.Position + 1;
     }
 
+    [Sql.Expression("array_to_string({0}, ' ')", ServerSideOnly = true)]
+    private static string JoinArray(string[] values) => throw new InvalidOperationException();
+
     /// <summary>
     ///     Gets a filtered, sorted, and paginated list of Pokemon for display.
     ///     Handles all database operations including party data retrieval and filtering.
@@ -1201,13 +1204,15 @@ public class PokemonService(
                 _ => query
             };
 
-            // Apply search filter at database level where possible (case-insensitive)
             if (!string.IsNullOrEmpty(search))
             {
                 var searchLower = search.ToLower();
-                query = query.Where(p => 
+                var moveSearch = searchLower.Replace(' ', '-');
+                query = query.Where(p =>
                     p.Pokemon.PokemonName.ToLower().Contains(searchLower) ||
-                    (p.Pokemon.Nickname != null && p.Pokemon.Nickname.ToLower().Contains(searchLower)));
+                    (p.Pokemon.Nickname != null && p.Pokemon.Nickname.ToLower().Contains(searchLower)) ||
+                    JoinArray(p.Pokemon.Tags).ToLower().Contains(searchLower) ||
+                    JoinArray(p.Pokemon.Moves).ToLower().Contains(moveSearch));
             }
 
             // A Pokemon is listed while it has a market listing without a buyer
@@ -1292,19 +1297,6 @@ public class PokemonService(
 
             // Execute the query and get the results
             var pokemonData = await projectedQuery.ToListAsync();
-
-            // Apply additional search filters for array fields that couldn't be done at DB level
-            if (!string.IsNullOrEmpty(search))
-            {
-                pokemonData = pokemonData.Where(p =>
-                    p.PokemonName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    (p.Nickname != null && p.Nickname.Contains(search, StringComparison.OrdinalIgnoreCase)) ||
-                    (p.Tags != null && p.Tags.Any(t =>
-                        t != null && t.Contains(search, StringComparison.OrdinalIgnoreCase))) ||
-                    (p.Moves != null && p.Moves.Any(m =>
-                        m != null && m.Contains(search, StringComparison.OrdinalIgnoreCase)))
-                ).ToList();
-            }
 
             // If we need to sort by type, batch fetch types from MongoDB
             if (sortOrder == SortOrder.Type)

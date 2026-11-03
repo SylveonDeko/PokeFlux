@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using EeveeCore.Common.ModuleBehaviors;
 using EeveeCore.Modules.Achievements.Common;
 using EeveeCore.Modules.Achievements.Models;
@@ -686,6 +687,74 @@ public class AchievementService(
         }
 
         return values;
+    }
+
+    /// <summary>
+    ///     Gets the top trainers who show their profile for one achievement.
+    /// </summary>
+    /// <param name="achievementType">The achievement.</param>
+    /// <param name="count">How many trainers to return.</param>
+    public async Task<List<AchievementLeaderboardEntry>> GetLeaderboardAsync(string achievementType, int count)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+        var rows = await VisibleScores(db, achievementType)
+            .Where(s => s.Value > 0)
+            .OrderByDescending(s => s.Value)
+            .ThenBy(s => s.UserId)
+            .Take(count)
+            .ToListAsync();
+
+        var ids = rows.Select(r => (ulong?)r.UserId).ToList();
+        var names = (await db.Users
+                .Where(u => ids.Contains(u.UserId))
+                .Select(u => new { u.UserId, u.TrainerNickname })
+                .ToListAsync())
+            .ToDictionary(u => u.UserId!.Value, u => u.TrainerNickname);
+
+        return rows
+            .Select((r, i) => new AchievementLeaderboardEntry(i + 1, r.UserId,
+                string.IsNullOrWhiteSpace(names.GetValueOrDefault(r.UserId)) ? null : names[r.UserId], r.Value))
+            .ToList();
+    }
+
+    /// <summary>
+    ///     Gets a trainer's rank and value for one achievement.
+    /// </summary>
+    /// <param name="achievementType">The achievement.</param>
+    /// <param name="userId">The trainer's user ID.</param>
+    /// <returns>The rank and value, or null when the trainer hides their profile or has no progress.</returns>
+    public async Task<(int Rank, long Value)?> GetLeaderboardRankAsync(string achievementType, ulong userId)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+        var scores = VisibleScores(db, achievementType);
+        var mine = await scores.FirstOrDefaultAsync(s => s.UserId == userId);
+        if (mine is not { Value: > 0 })
+            return null;
+
+        var ahead = await scores.CountAsync(s =>
+            s.Value > mine.Value || (s.Value == mine.Value && s.UserId < mine.UserId));
+        return (ahead + 1, mine.Value);
+    }
+
+    private static IQueryable<AchievementScore> VisibleScores(DittoDataConnection db, string achievementType)
+    {
+        var property = typeof(Database.Linq.Models.Pokemon.Achievement).GetProperties()
+            .First(p => p.GetCustomAttributes(typeof(LinqToDB.Mapping.ColumnAttribute), false)
+                .OfType<LinqToDB.Mapping.ColumnAttribute>()
+                .Any(c => c.Name == achievementType));
+
+        var row = Expression.Parameter(typeof(Database.Linq.Models.Pokemon.Achievement), "a");
+        var score = Expression.Lambda<Func<Database.Linq.Models.Pokemon.Achievement, AchievementScore>>(
+            Expression.MemberInit(Expression.New(typeof(AchievementScore)),
+                Expression.Bind(typeof(AchievementScore).GetProperty(nameof(AchievementScore.UserId))!,
+                    Expression.Property(row, nameof(Database.Linq.Models.Pokemon.Achievement.UserId))),
+                Expression.Bind(typeof(AchievementScore).GetProperty(nameof(AchievementScore.Value))!,
+                    Expression.Convert(Expression.Property(row, property), typeof(long)))),
+            row);
+
+        return db.Achievements
+            .Where(a => db.Users.Any(u => u.UserId == a.UserId && u.Visible == true))
+            .Select(score);
     }
 
     /// <summary>

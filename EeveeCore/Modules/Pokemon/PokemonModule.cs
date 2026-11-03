@@ -47,7 +47,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
     /// <param name="number">The Pokémon's number in the collection.</param>
     [Command("pokemon select")]
     [Alias("select")]
-    [Summary("Select a Pokémon by its number. Usage: `select <number>`")]
+    [Summary("Select a Pokémon by its number.")]
     [RequireContext(ContextType.Guild)]
     public async Task Select(ulong number)
     {
@@ -67,7 +67,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
     /// <param name="options">Sort, filter, gender, view, page and search options.</param>
     [Command("pokemon list")]
     [Alias("pokemon", "p")]
-    [Summary("Shows a detailed list of all your obtained Pokémon. Usage: `p [options]`\n" +
+    [Summary("Shows a detailed list of all your obtained Pokémon.\n" +
              "Options, in any order:\n" +
              "`sort:<iv|level|name|recent|type|favorite|party|champion>`\n" +
              "`filter:<all|shiny|radiant|shadow|legendary|favorite|champion|party|market>`\n" +
@@ -75,7 +75,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
              "`view:<detailed|normal|compact>`\n" +
              "`page:<number>` or a bare number\n" +
              "`search:<text>` or any other words\n" +
-             "Bare words work too: `p shiny compact 2`, `p iv`, `p female pikachu`.")]
+             "For example `{prefix}p shiny compact 2`.")]
     [Priority(-1)]
     public async Task List([Remainder] string? options = null)
     {
@@ -269,7 +269,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
     ///     Resurrects the player's dead Pokémon, recovering lost references first.
     /// </summary>
     [Command("pokemon resurrect")]
-    [Summary("Attempt to resurrect dead Pokémon. Usage: `pokemon resurrect`")]
+    [Summary("Attempt to resurrect dead Pokémon.")]
     [RequireContext(ContextType.Guild)]
     public async Task Resurrect()
     {
@@ -342,7 +342,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
     /// <param name="pokemon">A number, <c>new</c>, a species name, or nothing for the selected Pokémon.</param>
     [Command("pokemon info")]
     [Alias("info", "i")]
-    [Summary("Get information about a Pokémon. Usage: `info [number|new|name]`\n" +
+    [Summary("Get information about a Pokémon.\n" +
              "No argument shows your selected Pokémon, `new` your newest, a number that Pokémon in your collection. " +
              "A name shows the species, and `shiny`, `radiant` or `shadow` in the name shows that variant. " +
              "◀️ ▶️ page through your collection and ℹ️ shows forms and the evolution line.")]
@@ -410,7 +410,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
     /// <param name="variant">national, unowned, shadow, shiny, radiant or skin.</param>
     /// <param name="page">The page to open.</param>
     [Command("pokemon pokedex")]
-    [Summary("View your Pokédex progress. Usage: `pokemon pokedex [national|unowned|shadow|shiny|radiant|skin] [page]`")]
+    [Summary("View your Pokédex progress. Variants: `national`, `unowned`, `shadow`, `shiny`, `radiant`, `skin`.")]
     public async Task Pokedex(string? variant = null, int page = 1)
     {
         if (int.TryParse(variant, out var pageArgument))
@@ -512,7 +512,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
     /// </summary>
     /// <param name="number">The Pokémon's number in the collection.</param>
     [Command("pokemon release")]
-    [Summary("Release a Pokémon permanently. Usage: `pokemon release <number>`")]
+    [Summary("Release a Pokémon permanently.")]
     public async Task Release(ulong number)
     {
         try
@@ -551,7 +551,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
     /// </summary>
     /// <param name="number">The Pokémon's number in the collection.</param>
     [Command("pokemon sacrifice")]
-    [Summary("Sacrifice a Pokémon to fill your soul-gauge. Usage: `pokemon sacrifice <number>`")]
+    [Summary("Sacrifice a Pokémon to fill your soul-gauge.")]
     public async Task Sacrifice(ulong number)
     {
         try

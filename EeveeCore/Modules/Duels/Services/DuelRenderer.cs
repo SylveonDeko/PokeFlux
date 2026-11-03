@@ -729,7 +729,7 @@ public class DuelRenderer(IMongoService mongoService) : INService
 
         UnicodeTextRenderer.DrawText(canvas, x + 15, y + 25, sanitizedName, nameFont, namePaint);
 
-        var genderSymbol = pokemon.Gender == "male" ? "♂" : pokemon.Gender == "female" ? "♀" : "";
+        var genderSymbol = pokemon.Gender == "-m" ? "♂" : pokemon.Gender == "-f" ? "♀" : "";
         using var levelFont = new SKFont();
         levelFont.Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyleWeight.Normal, SKFontStyleWidth.Normal,
             SKFontStyleSlant.Upright);

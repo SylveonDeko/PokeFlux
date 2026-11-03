@@ -208,11 +208,6 @@ public class GamesModule(SlotMachineService slotMachineService, MissionService m
                 "Spin the Pokemon-themed slot machine for big wins!\n" +
                 "Various symbols with different payouts\n" +
                 $"Command: `{prefix}game slots`")
-            .AddField("📊 **Coming Soon**",
-                "• Pokemon Trivia Quiz\n" +
-                "• Memory Card Game\n" +
-                "• Battle Simulator\n" +
-                "• And more!")
             .WithFooter("Have fun and good luck! 🍀");
 
         await SendAsync(embed: embed);
