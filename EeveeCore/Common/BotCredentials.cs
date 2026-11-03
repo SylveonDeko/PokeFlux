@@ -92,7 +92,14 @@ public class BotCredentials : IBotCredentials
         ApiPort = int.Parse(config[nameof(ApiPort)] ?? "5000");
         JwtSecret = config[nameof(JwtSecret)];
         ApiKey = config[nameof(ApiKey)];
+        DiscordImportConnectionString = config[nameof(DiscordImportConnectionString)];
     }
+
+    /// <summary>
+    ///     Gets the connection string of the Discord EeveeCore database that players import from, or null to turn
+    ///     importing off.
+    /// </summary>
+    public string? DiscordImportConnectionString { get; }
 
     /// <summary>
     ///     Gets the secret the dashboard signs user tokens with, or null to reject every user token.
