@@ -1839,7 +1839,7 @@ public class SpawnService : INService, IReadyExecutor
             var cachedData = await redis.StringGetAsync(cacheKey);
             if (cachedData.HasValue)
             {
-                var spawnData = JsonSerializer.Deserialize<dynamic>(cachedData);
+                var spawnData = JsonSerializer.Deserialize<dynamic>((string)cachedData!);
                 return (
                     spawnData.GetProperty("PokemonName").GetString(),
                     spawnData.GetProperty("IsShiny").GetBoolean(),

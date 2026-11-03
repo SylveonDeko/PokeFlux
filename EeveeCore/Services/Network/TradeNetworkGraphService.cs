@@ -45,7 +45,7 @@ public class TradeNetworkGraphService : INService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<TradeNetworkGraph>(cachedNetwork!)!;
+                return System.Text.Json.JsonSerializer.Deserialize<TradeNetworkGraph>((string)cachedNetwork!)!;
             }
             catch (Exception ex)
             {
@@ -79,7 +79,7 @@ public class TradeNetworkGraphService : INService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<TradeNetworkGraph>(cachedNetwork!)!;
+                return System.Text.Json.JsonSerializer.Deserialize<TradeNetworkGraph>((string)cachedNetwork!)!;
             }
             catch (Exception ex)
             {

@@ -669,7 +669,7 @@ public class PokemonService(
     public async Task<int> GetUserSoulGauge(ulong userId)
     {
         var value = await redis.Redis.GetDatabase().StringGetAsync($"soul_gauge:{userId}");
-        return value.HasValue ? JsonSerializer.Deserialize<int>(value) : 0;
+        return value.HasValue ? JsonSerializer.Deserialize<int>((string)value!) : 0;
     }
 
     /// <summary>

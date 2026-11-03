@@ -53,7 +53,7 @@ public class NetworkAnalysisService : INService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<List<FunnelPattern>>(cached!)!;
+                return System.Text.Json.JsonSerializer.Deserialize<List<FunnelPattern>>((string)cached!)!;
             }
             catch (Exception ex)
             {
@@ -156,7 +156,7 @@ public class NetworkAnalysisService : INService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<List<AccountCluster>>(cached!)!;
+                return System.Text.Json.JsonSerializer.Deserialize<List<AccountCluster>>((string)cached!)!;
             }
             catch (Exception ex)
             {
@@ -232,7 +232,7 @@ public class NetworkAnalysisService : INService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<List<CircularFlow>>(cached!)!;
+                return System.Text.Json.JsonSerializer.Deserialize<List<CircularFlow>>((string)cached!)!;
             }
             catch (Exception ex)
             {

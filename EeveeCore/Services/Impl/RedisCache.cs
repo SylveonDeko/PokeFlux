@@ -32,7 +32,7 @@ public class RedisCache : IDataCache
     {
         var data = await _db.StringGetAsync(key);
         if (data.HasValue)
-            return JsonSerializer.Deserialize<T>(data);
+            return JsonSerializer.Deserialize<T>((string)data!);
 
         var value = await factory();
         await _db.StringSetAsync(key,
@@ -75,7 +75,7 @@ public class RedisCache : IDataCache
     public async Task<T> GetFromCache<T>(string key)
     {
         var data = await _db.StringGetAsync(key);
-        return data.HasValue ? JsonSerializer.Deserialize<T>(data) : default;
+        return data.HasValue ? JsonSerializer.Deserialize<T>((string)data!) : default;
     }
 
     /// <inheritdoc />

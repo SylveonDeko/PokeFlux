@@ -25,7 +25,7 @@ public class TradeLockService : ITradeLockService, INService
         
         return tradeLockedUsers.Any(value => 
             value.HasValue && 
-            ulong.TryParse(value, out var id) && 
+            ulong.TryParse((string?)value, out var id) &&
             id == userId);
     }
 
