@@ -245,6 +245,9 @@ public class SpawnService : INService, IReadyExecutor
                                        && await TryCatchAsync(message, message.Content, false))
                 return;
 
+            if (channel.Type != ChannelType.GuildText || !ValidateChannel(channel, guildConfig))
+                return;
+
             var now = DateTime.UtcNow;
             var cooldown = Math.Max(1, BASE_COOLDOWN - guildConfig.Speed);
 
@@ -256,12 +259,6 @@ public class SpawnService : INService, IReadyExecutor
                 return;
 
             _spawnCache.AddOrUpdate(guildId, now, (_, _) => now);
-
-            if (channel.Type != ChannelType.GuildText)
-                return;
-
-            if (!ValidateChannel(channel, guildConfig))
-                return;
 
             var spawnChannel = GetSpawnChannel(guild, channel, guildConfig);
             if (spawnChannel == null) return;
@@ -1532,24 +1529,15 @@ public class SpawnService : INService, IReadyExecutor
         }
         else
         {
-            // Initialize arrays if they are null
-            if (guild.EnabledChannels == null)
-                guild.EnabledChannels = [];
+            if (guild.EnabledChannels == null || guild.DisabledSpawnChannels == null)
+                await _mongoDb.Guilds.UpdateOneAsync(g => g.GuildId == guildId, Builders<Guild>.Update
+                    .Set(g => g.EnabledChannels, guild.EnabledChannels ?? [])
+                    .Set(g => g.DisabledSpawnChannels, guild.DisabledSpawnChannels ?? []));
 
-            if (guild.DisabledSpawnChannels == null)
-                guild.DisabledSpawnChannels = [];
-
-            // Add the channel to the appropriate list if not already present
-            if (enable && !guild.EnabledChannels.Contains(channelId))
-            {
-                guild.EnabledChannels.Add(channelId);
-                await _mongoDb.Guilds.ReplaceOneAsync(g => g.GuildId == guildId, guild);
-            }
-            else if (!enable && !guild.DisabledSpawnChannels.Contains(channelId))
-            {
-                guild.DisabledSpawnChannels.Add(channelId);
-                await _mongoDb.Guilds.ReplaceOneAsync(g => g.GuildId == guildId, guild);
-            }
+            var update = enable
+                ? Builders<Guild>.Update.AddToSet(g => g.EnabledChannels, channelId).Pull(g => g.DisabledSpawnChannels, channelId)
+                : Builders<Guild>.Update.AddToSet(g => g.DisabledSpawnChannels, channelId).Pull(g => g.EnabledChannels, channelId);
+            await _mongoDb.Guilds.UpdateOneAsync(g => g.GuildId == guildId, update);
         }
 
         return new EmbedBuilder()
