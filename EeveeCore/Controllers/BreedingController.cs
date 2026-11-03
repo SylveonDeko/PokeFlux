@@ -1,218 +1,91 @@
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
+using EeveeCore.Controllers.Common;
+using EeveeCore.Controllers.Models;
 using EeveeCore.Modules.Breeding.Services;
+using LinqToDB;
 using LinqToDB.Async;
-using Serilog;
+using Microsoft.AspNetCore.Mvc;
 
 namespace EeveeCore.Controllers;
 
 /// <summary>
-///     API controller for Pokemon breeding operations.
+///     The user's breeding list, breeding cooldown and daycare.
 /// </summary>
-[ApiController]
-[Route("api/[controller]")]
-[Authorize(AuthenticationSchemes = "Jwt")]
-public class BreedingController : ControllerBase
+/// <param name="breedingService">The breeding service.</param>
+/// <param name="dbProvider">The database connection provider.</param>
+/// <param name="cards">Builds Pokémon cards.</param>
+[Route("api/breeding")]
+public class BreedingController(
+    BreedingService breedingService,
+    LinqToDbConnectionProvider dbProvider,
+    PokemonCardFactory cards) : PokeFluxUserControllerBase
 {
-    private readonly BreedingService _breedingService;
-    private readonly LinqToDbConnectionProvider _dbProvider;
-
     /// <summary>
-    ///     Initializes a new instance of the <see cref="BreedingController"/> class.
+    ///     Gets the females on the breeding list, the breeding cooldown and how full the daycare is.
     /// </summary>
-    /// <param name="breedingService">The breeding service.</param>
-    /// <param name="dbProvider">The database connection provider.</param>
-    public BreedingController(BreedingService breedingService, LinqToDbConnectionProvider dbProvider)
+    [HttpGet]
+    public async Task<IActionResult> Get()
     {
-        _breedingService = breedingService;
-        _dbProvider = dbProvider;
+        await using (var db = await dbProvider.GetConnectionAsync())
+        {
+            if (!await db.Users.AnyAsync(u => u.UserId == UserId))
+                return Error(404, "You have not started! Start with the start command first.");
+        }
+
+        var positions = await breedingService.GetUserFemalesAsync(UserId);
+        var females = (await breedingService.GetBreedingFemalesBatch(UserId, positions))
+            .Select(f => f.Pokemon)
+            .ToList();
+        var context = await cards.GetContextAsync(UserId, females.Select(f => f.Id));
+        var cooldowns = await breedingService.GetMotherCooldownsAsync(females.Select(f => f.Id).ToList());
+
+        var list = new List<BreedingFemale>();
+        foreach (var female in females)
+            list.Add(new BreedingFemale(await cards.BuildAsync(female, context),
+                cooldowns.TryGetValue(female.Id, out var ends) ? ends : null));
+
+        var cooldown = await breedingService.GetBreedCooldownAsync(UserId);
+        var (eggs, limit) = await breedingService.GetDaycareUsageAsync(UserId);
+        return Ok(new BreedingResponse(list, (int)Math.Ceiling(cooldown.TotalSeconds), eggs, limit));
     }
 
     /// <summary>
-    ///     Gets the user's breeding queue (female Pokemon available for breeding).
+    ///     Replaces the breeding list. Only the user's female Pokémon and Dittos are kept.
     /// </summary>
-    /// <returns>List of female Pokemon available for breeding.</returns>
-    [HttpGet("queue")]
-    public async Task<ActionResult> GetBreedingQueue()
+    /// <param name="request">The females' IDs.</param>
+    [HttpPost("females")]
+    public async Task<IActionResult> SetFemales([FromBody] BreedingFemalesRequest request)
     {
-        try
+        var ids = (request.PokemonIds ?? []).Distinct().ToList();
+        if (ids.Count == 0)
         {
-            var userId = GetCurrentUserId();
-            if (userId == 0) return BadRequest(new { error = "Invalid user ID" });
-
-            // Get user's breeding queue from service
-            var firstFemale = await _breedingService.FetchFirstFemaleAsync(userId);
-            
-            await using var db = await _dbProvider.GetConnectionAsync();
-            
-            // Get all females in breeding queue - this would need to be expanded based on how the service stores the queue
-            var breedingQueue = new List<object>();
-            
-            if (firstFemale.HasValue)
-            {
-                var femalePokemon = await (from ownership in db.UserPokemonOwnerships
-                                         join pokemon in db.UserPokemon on ownership.PokemonId equals pokemon.Id
-                                         where ownership.UserId == userId && pokemon.Id == firstFemale.Value
-                                         select new
-                                         {
-                                             pokemon.Id,
-                                             pokemon.PokemonName,
-                                             pokemon.Level,
-                                             pokemon.Shiny,
-                                             pokemon.Radiant,
-                                             pokemon.Nature,
-                                             Position = ownership.Position + 1
-                                         }).FirstOrDefaultAsync();
-
-                if (femalePokemon != null)
-                    breedingQueue.Add(femalePokemon);
-            }
-
-            return Ok(new { success = true, queue = breedingQueue });
+            await breedingService.ClearUserFemalesAsync(UserId);
+            return Ok(new BreedingFemalesResponse([], [], "Cleared your female list."));
         }
-        catch (Exception ex)
+
+        Dictionary<ulong, ulong> numbers;
+        await using (var db = await dbProvider.GetConnectionAsync())
         {
-            Log.Error(ex, "Error getting breeding queue for user {UserId}", GetCurrentUserId());
-            return StatusCode(500, new { error = "Internal server error" });
+            numbers = (await db.UserPokemonOwnerships
+                    .Where(o => o.UserId == UserId && ids.Contains(o.PokemonId))
+                    .Select(o => new { o.PokemonId, o.Position })
+                    .ToListAsync())
+                .ToDictionary(o => o.PokemonId, o => o.Position + 1);
         }
+
+        var validation = await breedingService.ValidateFemaleBatchAsync(UserId, numbers.Values.ToList());
+        var valid = ids.Where(id => numbers.TryGetValue(id, out var number) && validation.GetValueOrDefault(number))
+            .ToList();
+        var invalid = ids.Except(valid).ToList();
+
+        if (valid.Count > 0)
+            await breedingService.UpdateUserFemalesAsync(UserId, valid.Select(id => numbers[id] - 1).ToList());
+
+        var message = valid.Count > 0
+            ? $"Your female Pokémon list has been updated with {valid.Count} Pokémon."
+            : "None of those Pokémon can be bred as a female. Your list was not changed.";
+        if (valid.Count > 0 && invalid.Count > 0)
+            message += $" {invalid.Count} were left out as they are not yours, or not female or Ditto.";
+
+        return Ok(new BreedingFemalesResponse(valid, invalid, message));
     }
-
-    /// <summary>
-    ///     Gets breeding statistics and history for the user.
-    /// </summary>
-    /// <returns>Breeding statistics including success rates and recent activity.</returns>
-    [HttpGet("history")]
-    public async Task<ActionResult> GetBreedingHistory()
-    {
-        try
-        {
-            var userId = GetCurrentUserId();
-            if (userId == 0) return BadRequest(new { error = "Invalid user ID" });
-
-            await using var db = await _dbProvider.GetConnectionAsync();
-            
-            // Get total eggs user has had
-            var totalEggs = await (from ownership in db.UserPokemonOwnerships
-                                 join pokemon in db.UserPokemon on ownership.PokemonId equals pokemon.Id
-                                 where ownership.UserId == userId && pokemon.PokemonName == "Egg"
-                                 select pokemon).CountAsync();
-
-            // Get current eggs
-            var currentEggs = await (from ownership in db.UserPokemonOwnerships
-                                   join pokemon in db.UserPokemon on ownership.PokemonId equals pokemon.Id
-                                   where ownership.UserId == userId && pokemon.PokemonName == "Egg"
-                                   select new
-                                   {
-                                       pokemon.Id,
-                                       pokemon.PokemonName,
-                                       pokemon.Counter,
-                                       CaughtAt = pokemon.Timestamp,
-                                       Position = ownership.Position + 1
-                                   }).ToListAsync();
-
-            var history = new
-            {
-                TotalEggsProduced = totalEggs,
-                CurrentEggs = currentEggs,
-                // Note: Actual breeding attempts aren't logged, so we can't show detailed history
-                // This would require adding breeding event logging to the breeding service
-            };
-
-            return Ok(new { success = true, history });
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error getting breeding history for user {UserId}", GetCurrentUserId());
-            return StatusCode(500, new { error = "Internal server error" });
-        }
-    }
-
-    /// <summary>
-    ///     Gets breeding compatibility information for Pokemon species.
-    /// </summary>
-    /// <returns>Information about Pokemon egg groups and breeding compatibility.</returns>
-    [HttpGet("compatibility")]
-    public async Task<ActionResult> GetBreedingCompatibility()
-    {
-        try
-        {
-            await using var db = await _dbProvider.GetConnectionAsync();
-            
-            // This would need to be implemented properly based on Pokemon egg group data
-            // For now, return basic information that breeding is a Discord-only feature
-            
-            var info = new
-            {
-                Message = "Breeding is performed through Discord commands.",
-                AvailableCommands = new[]
-                {
-                    "/breed - Attempt to breed two Pokemon",
-                    "/daycare - Manage breeding queue",
-                    "/hatch - Hatch eggs"
-                },
-                Requirements = new[]
-                {
-                    "Pokemon must be compatible egg groups",
-                    "Must have one male and one female",
-                    "Both Pokemon must be level 15 or higher"
-                }
-            };
-
-            return Ok(new { success = true, info });
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error getting breeding compatibility info");
-            return StatusCode(500, new { error = "Internal server error" });
-        }
-    }
-
-
-    /// <summary>
-    ///     Gets breeding statistics and information.
-    /// </summary>
-    /// <returns>Breeding statistics.</returns>
-    [HttpGet("stats")]
-    public async Task<ActionResult> GetBreedingStats()
-    {
-        try
-        {
-            var userId = GetCurrentUserId();
-            if (userId == 0) return BadRequest(new { error = "Invalid user ID" });
-
-            await using var db = await _dbProvider.GetConnectionAsync();
-            
-            // Get breeding-related statistics
-            var totalEggs = await (from ownership in db.UserPokemonOwnerships
-                                 join pokemon in db.UserPokemon on ownership.PokemonId equals pokemon.Id
-                                 where ownership.UserId == userId && pokemon.PokemonName == "Egg"
-                                 select pokemon).CountAsync();
-
-            var stats = new
-            {
-                TotalEggs = totalEggs,
-                // Add more breeding-related stats as needed
-            };
-
-            return Ok(new { success = true, stats });
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error getting breeding stats for user {UserId}", GetCurrentUserId());
-            return StatusCode(500, new { error = "Internal server error" });
-        }
-    }
-
-    /// <summary>
-    ///     Gets the current user ID from JWT claims.
-    /// </summary>
-    /// <returns>The current user ID as a ulong.</returns>
-    private ulong GetCurrentUserId()
-    {
-        var userIdClaim = User.FindFirst("UserId")?.Value;
-        return ulong.TryParse(userIdClaim, out var userId) ? userId : 0;
-    }
-
-    // Note: Breeding operations should be performed through Discord commands
-    // This controller provides read-only information about breeding for dashboard display
 }

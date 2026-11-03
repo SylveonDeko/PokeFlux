@@ -293,13 +293,7 @@ public class ShopService(LinqToDbConnectionProvider dbProvider, IMongoService mo
     {
         try
         {
-            await using var db = await dbProvider.GetConnectionAsync();
-            
-            var pokemonCount = await db.GetTable<Database.Linq.Models.Pokemon.UserPokemonOwnership>()
-                .Where(p => p.UserId == userId)
-                .CountAsync();
-
-            return pokemonCount >= ShopConstants.MinimumPokemonRequired;
+            return await GetCollectionSizeAsync(userId) >= ShopConstants.MinimumPokemonRequired;
         }
         catch (Exception e)
         {
@@ -576,6 +570,34 @@ public class ShopService(LinqToDbConnectionProvider dbProvider, IMongoService mo
     }
 
     #region Buy Methods (Consolidated from Items Module)
+
+    /// <summary>
+    ///     The vitamins that can be bought by name.
+    /// </summary>
+    public static readonly string[] Vitamins = ["hp-up", "protein", "iron", "calcium", "zinc", "carbos"];
+
+    /// <summary>
+    ///     Buys an item by name, routing vitamins, rare candy, daycare spaces and redeems to their own purchases.
+    /// </summary>
+    /// <param name="userId">The ID of the user.</param>
+    /// <param name="itemName">The item's name, with words joined by hyphens.</param>
+    /// <param name="amount">How many to buy, or null for the default.</param>
+    /// <returns>A CommandResult containing the operation result message.</returns>
+    public async Task<CommandResult> BuyByNameAsync(ulong userId, string itemName, int? amount)
+    {
+        itemName = itemName.Trim().Replace(' ', '-').ToLowerInvariant();
+        if (Vitamins.Contains(itemName))
+            return await BuyVitaminsAsync(userId, itemName, amount ?? 1);
+        if (itemName is "candy" or "rare-candy")
+            return await BuyCandyAsync(userId, amount ?? 1);
+        if (itemName is "daycare" or "daycare-space")
+            return await BuyDaycareAsync(userId, amount ?? 1);
+        if (itemName is "redeems" or "redeem")
+            return await BuyRedeemsAsync(userId, (ulong?)amount);
+        if (amount is > 1)
+            return CommandResult.Error($"You can only buy one {itemName} at a time.");
+        return await BuyItemAsync(userId, itemName);
+    }
 
     /// <summary>
     ///     Buys an item from the shop and either equips it to the selected Pokemon or adds it to inventory.
@@ -898,6 +920,59 @@ public class ShopService(LinqToDbConnectionProvider dbProvider, IMongoService mo
     }
 
     /// <summary>
+    ///     The chest types, from cheapest to dearest.
+    /// </summary>
+    public static readonly string[] ChestTypes = ["rare", "mythic", "legend"];
+
+    /// <summary>
+    ///     The price of each chest type, by currency (credits or redeems).
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>> ChestPrices =
+        new Dictionary<string, IReadOnlyDictionary<string, int>>
+        {
+            ["credits"] = new Dictionary<string, int> { ["rare"] = 300000, ["mythic"] = 600000, ["legend"] = 2000000 },
+            ["redeems"] = new Dictionary<string, int> { ["rare"] = 7, ["mythic"] = 10, ["legend"] = 33 }
+        };
+
+    /// <summary>
+    ///     How many chests of each type can be bought with credits each week.
+    /// </summary>
+    public const int MaxWeeklyCreditChests = 5;
+
+    /// <summary>
+    ///     Gets how many chests of each type a user has bought with credits this week.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    /// <returns>The count by chest type.</returns>
+    public async Task<Dictionary<string, int>> GetWeeklyChestPurchasesAsync(ulong userId)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+        var store = await db.ChestStore.FirstOrDefaultAsync(c => c.UserId == userId);
+        var currentWeek = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 604800;
+        if (store == null || !long.TryParse(store.Restock, out var restock) || restock <= currentWeek)
+            return ChestTypes.ToDictionary(t => t, _ => 0);
+
+        return new Dictionary<string, int>
+        {
+            ["rare"] = store.Rare,
+            ["mythic"] = store.Mythic,
+            ["legend"] = store.Legend
+        };
+    }
+
+    /// <summary>
+    ///     Counts the Pokémon in a user's collection, for the shop's minimum.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    public async Task<int> GetCollectionSizeAsync(ulong userId)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+        return await db.GetTable<Database.Linq.Models.Pokemon.UserPokemonOwnership>()
+            .Where(p => p.UserId == userId)
+            .CountAsync();
+    }
+
+    /// <summary>
     ///     Buys a treasure chest that can contain rare Pokémon or items.
     /// </summary>
     /// <param name="userId">The Discord ID of the user.</param>
@@ -909,29 +984,13 @@ public class ShopService(LinqToDbConnectionProvider dbProvider, IMongoService mo
         var ct = chestType.ToLower().Trim();
         var cor = currency.ToLower();
 
-        if (!new[] { "rare", "mythic", "legend" }.Contains(ct))
+        if (!ChestTypes.Contains(ct))
             return CommandResult.Error($"`{ct}` is not a valid chest type! Choose one of Rare, Mythic, or Legend.");
 
         if (!new[] { "credits", "redeems" }.Contains(cor))
             return CommandResult.Error("Specify either \"credits\" or \"redeems\"!");
 
-        var prices = new Dictionary<string, Dictionary<string, int>>
-        {
-            ["credits"] = new()
-            {
-                ["rare"] = 300000,
-                ["mythic"] = 600000,
-                ["legend"] = 2000000
-            },
-            ["redeems"] = new()
-            {
-                ["rare"] = 7,
-                ["mythic"] = 10,
-                ["legend"] = 33
-            }
-        };
-
-        var price = (ulong)prices[cor][ct];
+        var price = (ulong)ChestPrices[cor][ct];
         await using var db = await dbProvider.GetConnectionAsync();
         var user = await db.Users.FirstOrDefaultAsync(u => u.UserId == userId);
         if (user == null)
@@ -962,7 +1021,7 @@ public class ShopService(LinqToDbConnectionProvider dbProvider, IMongoService mo
                 chestStore.Restock = (long.Parse(currentWeek) + 1).ToString();
             }
 
-            const int maxChests = 5;
+            const int maxChests = MaxWeeklyCreditChests;
             var currentAmount = ct switch
             {
                 "rare" => chestStore.Rare,

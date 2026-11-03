@@ -699,14 +699,112 @@ public class AchievementService(
     /// <summary>
     ///     Gets the last completed milestone for a specific achievement.
     /// </summary>
-    public async Task<int> GetLastMilestoneAsync(ulong userId, string achievementType)
+    public async Task<int> GetLastMilestoneAsync(ulong userId, string achievementType) =>
+        (await GetLastMilestonesAsync(userId)).GetValueOrDefault(achievementType);
+
+    /// <summary>
+    ///     Gets the milestones of an achievement that a value has reached.
+    /// </summary>
+    /// <param name="achievementType">The achievement.</param>
+    /// <param name="value">The achievement's value.</param>
+    public static int[] ReachedMilestones(string achievementType, int value) =>
+        AchievementConstants.Milestones.TryGetValue(achievementType, out var milestones)
+            ? milestones.Where(m => value >= m).ToArray()
+            : [];
+
+    /// <summary>
+    ///     Gets the last milestone reached of every achievement a user has reached one of.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    /// <returns>The last milestone value by achievement type.</returns>
+    public async Task<Dictionary<string, int>> GetLastMilestonesAsync(ulong userId) =>
+        (await GetAchievementValuesAsync(userId))
+        .Select(a => (a.Key, Reached: ReachedMilestones(a.Key, a.Value)))
+        .Where(a => a.Reached.Length > 0)
+        .ToDictionary(a => a.Key, a => a.Reached.Max());
+
+    /// <summary>
+    ///     Gets how many milestones a user has reached across every achievement.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    public async Task<int> GetTotalMilestonesAsync(ulong userId) =>
+        (await GetAchievementValuesAsync(userId)).Sum(a => ReachedMilestones(a.Key, a.Value).Length);
+
+    #endregion
+
+    #region Categories and Loyalty Tiers
+
+    /// <summary>
+    ///     The categories achievements are grouped into.
+    /// </summary>
+    public static readonly string[] Categories =
+        ["battle", "breeding", "catching", "special", "market", "activities", "events"];
+
+    /// <summary>
+    ///     Keeps the achievements that belong to a category.
+    /// </summary>
+    /// <param name="achievements">Achievement values by type.</param>
+    /// <param name="category">The category, or null for every achievement.</param>
+    public static Dictionary<string, int> FilterByCategory(Dictionary<string, int> achievements, string? category)
     {
-        await using var db = await dbProvider.GetConnectionAsync();
-        return await db.MilestoneProgress
-            .Where(mp => mp.UserId == userId && mp.AchievementType == achievementType)
-            .Select(mp => mp.MilestoneValue)
-            .OrderByDescending(mp => mp)
-            .FirstOrDefaultAsync();
+        if (string.IsNullOrEmpty(category))
+            return achievements;
+
+        return achievements.Where(a => IsInCategory(a.Key, category)).ToDictionary(x => x.Key, x => x.Value);
+    }
+
+    /// <summary>
+    ///     Checks whether an achievement belongs to a category.
+    /// </summary>
+    /// <param name="achievement">The achievement type.</param>
+    /// <param name="category">The category.</param>
+    public static bool IsInCategory(string achievement, string category) => category switch
+    {
+        "battle" => achievement.StartsWith("duel_") || achievement.StartsWith("npc_") || achievement == "gym_wins",
+        "breeding" => achievement.StartsWith("breed_") || achievement.EndsWith("_bred"),
+        "catching" => achievement.StartsWith("pokemon_") || achievement.EndsWith("_caught"),
+        "market" => achievement.StartsWith("market_") || achievement.Contains("released"),
+        "activities" => achievement is "fishing_success" or "missions" or "votes" || achievement.StartsWith("game_"),
+        "events" => achievement.Contains("event") || achievement.StartsWith("chests_") || achievement.Contains("donation"),
+        "special" => achievement is "dex_complete",
+        _ => true
+    };
+
+    /// <summary>
+    ///     Gets the loyalty tier for a number of loyalty points.
+    /// </summary>
+    /// <param name="points">The loyalty points.</param>
+    public static LoyaltyTier GetLoyaltyTier(int points) => points switch
+    {
+        >= 50000 => new LoyaltyTier { RequiredPoints = 50000, TierName = "Diamond Elite", XpMultiplier = 2.5, ShopDiscount = 25, TierColor = AchievementConstants.DiamondTierColor, MonthlyBonus = 100000 },
+        >= 25000 => new LoyaltyTier { RequiredPoints = 25000, TierName = "Platinum Master", XpMultiplier = 2.0, ShopDiscount = 20, TierColor = AchievementConstants.PlatinumTierColor, MonthlyBonus = 50000 },
+        >= 10000 => new LoyaltyTier { RequiredPoints = 10000, TierName = "Gold Champion", XpMultiplier = 1.75, ShopDiscount = 15, TierColor = AchievementConstants.GoldTierColor, MonthlyBonus = 25000 },
+        >= 5000 => new LoyaltyTier { RequiredPoints = 5000, TierName = "Silver Expert", XpMultiplier = 1.5, ShopDiscount = 10, TierColor = AchievementConstants.SilverTierColor, MonthlyBonus = 10000 },
+        >= 1000 => new LoyaltyTier { RequiredPoints = 1000, TierName = "Bronze Trainer", XpMultiplier = 1.25, ShopDiscount = 5, TierColor = AchievementConstants.BronzeTierColor, MonthlyBonus = 5000 },
+        _ => new LoyaltyTier { RequiredPoints = 0, TierName = "Novice", XpMultiplier = 1.0, ShopDiscount = 0, TierColor = 0x808080, MonthlyBonus = 1000 }
+    };
+
+    /// <summary>
+    ///     Gets the next loyalty tier above a number of points.
+    /// </summary>
+    /// <param name="currentPoints">The loyalty points.</param>
+    /// <returns>The next tier, or null at the top tier.</returns>
+    public static LoyaltyTier? GetNextLoyaltyTier(int currentPoints)
+    {
+        int[] tiers = [1000, 5000, 10000, 25000, 50000];
+        var nextTierPoints = tiers.FirstOrDefault(t => t > currentPoints);
+        return nextTierPoints > 0 ? GetLoyaltyTier(nextTierPoints) : null;
+    }
+
+    /// <summary>
+    ///     Gets the daily streak at which the next streak bonus is given.
+    /// </summary>
+    /// <param name="currentStreak">The current daily streak.</param>
+    /// <returns>The next bonus streak, or 0 when none is left.</returns>
+    public static int GetNextStreakBonus(int currentStreak)
+    {
+        int[] bonuses = [3, 7, 14, 30];
+        return bonuses.FirstOrDefault(b => b > currentStreak);
     }
 
     #endregion

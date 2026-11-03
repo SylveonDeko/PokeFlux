@@ -13,8 +13,8 @@ namespace EeveeCore.Modules.Shop;
 [Name("Shop")]
 public class ShopModule : EeveeModule<ShopService>
 {
-    private static readonly string[] Vitamins = ["hp-up", "protein", "iron", "calcium", "zinc", "carbos"];
-    private static readonly string[] ChestTypes = ["rare", "mythic", "legend"];
+    private static readonly string[] Vitamins = ShopService.Vitamins;
+    private static readonly string[] ChestTypes = ShopService.ChestTypes;
     private static readonly string[] Currencies = ["credits", "redeems"];
 
     /// <summary>
@@ -379,21 +379,7 @@ public class ShopModule : EeveeModule<ShopService>
 
         try
         {
-            CommandResult result;
-            if (Vitamins.Contains(itemName))
-                result = await Service.BuyVitaminsAsync(ctx.User.Id, itemName, amount ?? 1);
-            else if (itemName is "candy" or "rare-candy")
-                result = await Service.BuyCandyAsync(ctx.User.Id, amount ?? 1);
-            else if (itemName is "daycare" or "daycare-space")
-                result = await Service.BuyDaycareAsync(ctx.User.Id, amount ?? 1);
-            else if (itemName is "redeems" or "redeem")
-                result = await Service.BuyRedeemsAsync(ctx.User.Id, (ulong?)amount);
-            else if (amount is > 1)
-                result = CommandResult.Error($"You can only buy one {itemName} at a time.");
-            else
-                result = await Service.BuyItemAsync(ctx.User.Id, itemName);
-
-            await SendResultAsync(result);
+            await SendResultAsync(await Service.BuyByNameAsync(ctx.User.Id, itemName, amount));
         }
         catch (Exception e)
         {

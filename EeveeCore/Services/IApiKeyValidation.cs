@@ -1,7 +1,7 @@
 namespace EeveeCore.Services;
 
 /// <summary>
-///     API key validation interface for fraud detection dashboard.
+///     Checks the API key the dashboard sends.
 /// </summary>
 public interface IApiKeyValidation
 {

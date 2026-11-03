@@ -1,6 +1,7 @@
 ﻿using System.Text.Json.Serialization;
 using EeveeCore.AuthHandlers;
 using EeveeCore.Common.ModuleBehaviors;
+using EeveeCore.Controllers.Common;
 using EeveeCore.Services.Impl;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.OpenApi.Models;
@@ -61,59 +62,31 @@ public class Program
 
             builder.WebHost.UseUrls($"http://localhost:{credentials.ApiPort}");
 
-            // Register JWT token service
-            builder.Services.AddSingleton<JwtTokenService>();
-            builder.Services.AddHttpClient<JwtTokenService>();
-
-            // Configure authentication schemes
             builder.Services.AddTransient<IApiKeyValidation, ApiKeyValidation>();
-            var auth = builder.Services.AddAuthentication();
+            builder.Services.AddAuthentication()
+                .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthHandler>(ApiConstants.ApiKeyScheme, null)
+                .AddScheme<AuthenticationSchemeOptions, DashJwtAuthHandler>(DashJwtConstants.SchemeName, null);
 
-            // Add existing API Key authentication
-            auth.AddScheme<AuthenticationSchemeOptions, ApiKeyAuthHandler>("ApiKey", null);
+            if (string.IsNullOrWhiteSpace(credentials.ApiKey))
+                Log.Warning("ApiKey is not configured; the dashboard API will reject every request.");
+            if (string.IsNullOrWhiteSpace(credentials.JwtSecret))
+                Log.Warning("JwtSecret is not configured; dashboard user JWT auth will reject all tokens. " +
+                            "Set the same JwtSecret on the bot and the dashboard.");
 
-            // Add new JWT authentication
-            auth.AddScheme<AuthenticationSchemeOptions, JwtAuthHandler>("Jwt", null);
-
-            // Configure authorization policies
             builder.Services.AddAuthorizationBuilder()
-                .AddPolicy("ApiKeyPolicy",
-                    policy => policy.RequireAuthenticatedUser().AddAuthenticationSchemes("ApiKey"))
-                .AddPolicy("JwtPolicy",
-                    policy => policy.RequireAuthenticatedUser().AddAuthenticationSchemes("Jwt"))
-                .AddPolicy("AdminPolicy",
-                    policy => policy.RequireAuthenticatedUser()
-                        .AddAuthenticationSchemes("Jwt")
-                        .RequireAssertion(context =>
-                        {
-                            var isAdmin = bool.TryParse(context.User.FindFirst("IsAdmin")?.Value, out var admin) &&
-                                          admin;
-                            var isBotOwner =
-                                bool.TryParse(context.User.FindFirst("IsBotOwner")?.Value, out var owner) && owner;
-                            return isAdmin || isBotOwner;
-                        }))
-                .AddPolicy("BotOwnerPolicy",
-                    policy => policy.RequireAuthenticatedUser()
-                        .AddAuthenticationSchemes("Jwt")
-                        .RequireAssertion(context =>
-                        {
-                            return bool.TryParse(context.User.FindFirst("IsBotOwner")?.Value, out var isBotOwner) &&
-                                   isBotOwner;
-                        }));
+                .AddPolicy(ApiConstants.ApiKeyPolicy,
+                    policy => policy.RequireAuthenticatedUser().AddAuthenticationSchemes(ApiConstants.ApiKeyScheme));
 
-            builder.Services.AddAuthorization();
-
-            // Add controllers with JSON options
             builder.Services.AddControllers()
                 .AddJsonOptions(options =>
                 {
                     options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
                     options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
-                    options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+                    options.JsonSerializerOptions.Converters.Add(new SnowflakeJsonConverter());
+                    options.JsonSerializerOptions.Converters.Add(new UtcDateTimeJsonConverter());
                 })
                 .ConfigureApiBehaviorOptions(options => { options.SuppressModelStateInvalidFilter = true; });
 
-            // Update Swagger configuration to support both authentication schemes
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen(x =>
             {
@@ -170,25 +143,8 @@ public class Program
                 });
             });
 
-            // Update CORS policy to include auth endpoints
-            builder.Services.AddCors(options =>
-            {
-                options.AddPolicy("FraudDashboardPolicy", policy =>
-                {
-                    policy
-                        .WithOrigins($"http://localhost:{credentials.ApiPort}",
-                            $"https://localhost:{credentials.ApiPort}",
-                            "http://localhost:3000", // Add your Svelte dev server
-                            "http://localhost:5173") // Add Vite dev server default port
-                        .AllowAnyMethod()
-                        .AllowAnyHeader()
-                        .AllowCredentials();
-                });
-            });
-
             var app = builder.Build();
 
-            app.UseCors("FraudDashboardPolicy");
             app.UseSerilogRequestLogging();
 
             if (builder.Environment.IsDevelopment())
@@ -196,18 +152,16 @@ public class Program
                 app.UseSwagger();
                 app.UseSwaggerUI(c =>
                 {
-                    c.SwaggerEndpoint("/swagger/v1/swagger.json", "EeveeCore API V1");
+                    c.SwaggerEndpoint("/swagger/v1/swagger.json", "PokeFlux API V1");
                     c.RoutePrefix = "swagger";
                 });
             }
 
-            // Add authentication and authorization middleware
             app.UseAuthentication();
             app.UseAuthorization();
             app.MapControllers();
 
-            Log.Information("EeveeCore API listening on http://localhost:{Port}", credentials.ApiPort);
-            Log.Information("Swagger UI available at http://localhost:{Port}/swagger", credentials.ApiPort);
+            Log.Information("PokeFlux API listening on http://localhost:{Port}", credentials.ApiPort);
             await app.RunAsync();
         }
         else

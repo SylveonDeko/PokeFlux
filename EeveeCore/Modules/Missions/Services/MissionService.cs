@@ -424,15 +424,82 @@ public class MissionService(
     public async Task<bool> DeductCrystalSlimeAsync(ulong userId, int amount)
     {
         await using var db = await dbProvider.GetConnectionAsync();
-        var user = await db.Users.FirstOrDefaultAsync(u => u.UserId == userId);
-        
-        if (user == null || (user.CrystalSlime ?? 0) < amount)
-            return false;
-
-        await db.Users.Where(u => u.UserId == userId)
+        return await db.Users.Where(u => u.UserId == userId && (u.CrystalSlime ?? 0) >= amount)
             .Set(u => u.CrystalSlime, u => (u.CrystalSlime ?? 0) - amount)
-            .UpdateAsync();
-        return true;
+            .UpdateAsync() > 0;
+    }
+
+    /// <summary>
+    ///     Whether a store item can only be bought with the missions buy command.
+    /// </summary>
+    /// <param name="item">The store item.</param>
+    public static bool IsCommandOnly(StoreItemConfig item) => item.Type == StoreItemType.Lottery;
+
+    /// <summary>
+    ///     Buys an item from the crystal slime exchange. The Meowth Ticket is a game played in chat and is refused.
+    /// </summary>
+    /// <param name="userId">The user ID.</param>
+    /// <param name="itemKey">The store item's key.</param>
+    /// <param name="prefix">The command prefix to show in the message.</param>
+    public async Task<(bool Success, string Message)> BuyStoreItemAsync(ulong userId, string itemKey,
+        string prefix = "")
+    {
+        if (!MissionConstants.StoreItems.TryGetValue(itemKey, out var storeItem))
+            return (false, "There is no store item with that name.");
+
+        if (IsCommandOnly(storeItem))
+            return (false, $"The {storeItem.Name} is a game played in chat. Buy it with the missions buy command.");
+
+        if (await GetUserCrystalSlimeAsync(userId) < storeItem.Cost)
+            return (false, "Not enough crystallized slime.");
+
+        if (storeItem.Type == StoreItemType.ShadowEssence)
+        {
+            var (_, hunt) = await GetUserChainAndHuntAsync(userId);
+            if (string.IsNullOrEmpty(hunt))
+                return (false, "You have not set a shadow hunt yet.");
+        }
+
+        if (!await DeductCrystalSlimeAsync(userId, storeItem.Cost))
+            return (false, "Not enough crystallized slime.");
+
+        switch (storeItem.Type)
+        {
+            case StoreItemType.Item:
+                await AddItemToInventoryAsync(userId, itemKey);
+                return (true, $"You bought a {storeItem.Name}! Use it with `{prefix}apply {itemKey}`.");
+
+            case StoreItemType.Credits:
+                await AddMewCoinsAsync(userId, storeItem.Reward);
+                return (true, $"Successfully purchased {storeItem.Name} for {storeItem.Cost} crystallized slime!");
+
+            case StoreItemType.ShadowEssence:
+                await IncreaseChainAsync(userId,
+                    Random.Shared.Next(storeItem.MinChainIncrease, storeItem.MaxChainIncrease + 1));
+                return (true, "You bought some shadow essence! Your chain has been increased!");
+
+            case StoreItemType.VipTokens:
+                await AddVipTokensAsync(userId, storeItem.VipTokensAmount);
+                return (true,
+                    $"Successfully purchased {storeItem.VipTokensAmount} VIP token{(storeItem.VipTokensAmount == 1 ? "" : "s")} for {storeItem.Cost} crystallized slime!");
+
+            default:
+                return (true, $"Successfully purchased {storeItem.Name}!");
+        }
+    }
+
+    /// <summary>
+    ///     Gets the mission XP needed to go from a level to the next.
+    /// </summary>
+    /// <param name="level">The level.</param>
+    /// <returns>The XP, or null when there is no next level.</returns>
+    public async Task<int?> GetLevelRequirementAsync(int level)
+    {
+        var levels = await mongoService.Levels.Find(_ => true).FirstOrDefaultAsync();
+        return levels?.LevelRequirements is { } requirements &&
+               requirements.TryGetValue(level.ToString(), out var xp)
+            ? Convert.ToInt32(xp)
+            : null;
     }
 
     /// <summary>
@@ -540,6 +607,30 @@ public class MissionService(
             .Find(up => up.UserId == userId)
             .FirstOrDefaultAsync();
     }
+
+    /// <summary>
+    ///     Gets a user's progress on one mission.
+    /// </summary>
+    /// <param name="userProgress">The user's progress data.</param>
+    /// <param name="missionKey">The mission's key.</param>
+    /// <returns>The progress made towards the mission's target.</returns>
+    public static int GetMissionProgress(UserProgress userProgress, string missionKey) => missionKey switch
+    {
+        "breed" => userProgress.Breed,
+        "catch" => userProgress.Catch,
+        "duel_win" => userProgress.DuelWin,
+        "duel_lose" => userProgress.DuelLose,
+        "ev" => userProgress.Ev,
+        "fish" => userProgress.Fish,
+        "npc" => userProgress.Npc,
+        "party" => userProgress.Party,
+        "pokemon_setup" => userProgress.PokemonSetup,
+        "vote" => userProgress.Vote,
+        "game_wordsearch" => userProgress.GameWordSearch,
+        "game_slots" => userProgress.GameSlots,
+        "game_slots_win" => userProgress.GameSlotsWin,
+        _ => 0
+    };
 
     /// <summary>
     ///     Gets the user's XP and level information.

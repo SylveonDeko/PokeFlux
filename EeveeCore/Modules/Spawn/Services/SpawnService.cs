@@ -293,7 +293,7 @@ public class SpawnService : INService, IReadyExecutor
     /// </summary>
     /// <param name="guildId">The Discord ID of the guild.</param>
     /// <returns>The guild configuration document.</returns>
-    private async Task<Guild> GetGuildConfig(ulong guildId)
+    public async Task<Guild> GetGuildConfig(ulong guildId)
     {
         var guildConfig = await _mongoDb.Guilds
             .Find(g => g.GuildId == guildId)
@@ -1619,6 +1619,31 @@ public class SpawnService : INService, IReadyExecutor
     }
 
     /// <summary>
+    ///     Changes the given spawn settings of a guild and leaves the others as they are.
+    /// </summary>
+    /// <param name="guildId">The ID of the guild.</param>
+    /// <param name="update">The settings to change.</param>
+    public async Task UpdateSpawnSettings(ulong guildId, SpawnSettingsUpdate update)
+    {
+        var set = Builders<Guild>.Update;
+        var updates = new List<UpdateDefinition<Guild>>();
+        if (update.EnableSpawnsAll is { } enableAll) updates.Add(set.Set(g => g.EnableSpawnsAll, enableAll));
+        if (update.EnabledChannels is { } enabled) updates.Add(set.Set(g => g.EnabledChannels, enabled));
+        if (update.DisabledChannels is { } disabled) updates.Add(set.Set(g => g.DisabledSpawnChannels, disabled));
+        if (update.Redirects is { } redirects) updates.Add(set.Set(g => g.Redirects, redirects));
+        if (update.Speed is { } speed) updates.Add(set.Set(g => g.Speed, Math.Clamp(speed, 1, 20)));
+        if (update.SmallImages is { } small) updates.Add(set.Set(g => g.SmallImages, small));
+        if (update.ModalView is { } modal) updates.Add(set.Set(g => g.ModalView, modal));
+        if (update.DeleteSpawns is { } delete) updates.Add(set.Set(g => g.DeleteSpawns, delete));
+        if (update.PinSpawns is { } pin) updates.Add(set.Set(g => g.PinSpawns, pin));
+        if (updates.Count == 0)
+            return;
+
+        await GetGuildConfig(guildId);
+        await _mongoDb.Guilds.UpdateOneAsync(g => g.GuildId == guildId, set.Combine(updates));
+    }
+
+    /// <summary>
     ///     Gets the current spawn settings for a guild.
     ///     Displays all configured options and channel settings.
     /// </summary>
@@ -2169,3 +2194,26 @@ public class SpawnService : INService, IReadyExecutor
         bool ShouldDeleteSpawn,
         bool ShouldPinSpawn);
 }
+
+/// <summary>
+///     Spawn settings to change. Null values are left as they are.
+/// </summary>
+/// <param name="EnableSpawnsAll">Whether Pokémon spawn in every channel.</param>
+/// <param name="EnabledChannels">The channels Pokémon spawn in.</param>
+/// <param name="DisabledChannels">The channels Pokémon never spawn in.</param>
+/// <param name="Redirects">The channels spawns are sent to.</param>
+/// <param name="Speed">How often Pokémon spawn, from 1 to 20.</param>
+/// <param name="SmallImages">Whether spawns show small images.</param>
+/// <param name="ModalView">Whether spawns are only caught with the catch command.</param>
+/// <param name="DeleteSpawns">Whether spawn messages are deleted once caught.</param>
+/// <param name="PinSpawns">Whether caught spawn messages are pinned.</param>
+public record SpawnSettingsUpdate(
+    bool? EnableSpawnsAll,
+    List<ulong>? EnabledChannels,
+    List<ulong>? DisabledChannels,
+    List<ulong>? Redirects,
+    int? Speed,
+    bool? SmallImages,
+    bool? ModalView,
+    bool? DeleteSpawns,
+    bool? PinSpawns);

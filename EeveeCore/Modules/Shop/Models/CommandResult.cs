@@ -22,6 +22,11 @@ public class CommandResult
     public bool Ephemeral { get; set; } = false;
 
     /// <summary>
+    ///     Gets a value indicating whether the operation failed.
+    /// </summary>
+    public bool IsError { get; private init; }
+
+    /// <summary>
     ///     Creates a successful command result with a message.
     /// </summary>
     /// <param name="message">The success message.</param>
@@ -40,7 +45,7 @@ public class CommandResult
     /// <returns>An error CommandResult.</returns>
     public static CommandResult Error(string message, bool ephemeral = true)
     {
-        return new CommandResult { Message = message, Ephemeral = ephemeral };
+        return new CommandResult { Message = message, Ephemeral = ephemeral, IsError = true };
     }
 
     /// <summary>

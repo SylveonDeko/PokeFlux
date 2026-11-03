@@ -15,8 +15,7 @@ namespace EeveeCore.Modules.Achievements;
 [Name("Achievements")]
 public class AchievementsModule : EeveeModule<AchievementService>
 {
-    private static readonly string[] Categories =
-        ["battle", "breeding", "catching", "special", "market", "activities", "events"];
+    private static readonly string[] Categories = AchievementService.Categories;
 
     /// <summary>
     ///     Shows a player's achievements.
@@ -248,23 +247,7 @@ public class AchievementsModule : EeveeModule<AchievementService>
     }
 
     private static Dictionary<string, int> FilterAchievementsByCategory(Dictionary<string, int> achievements,
-        string? category)
-    {
-        if (string.IsNullOrEmpty(category))
-            return achievements;
-
-        return category switch
-        {
-            "battle" => achievements.Where(a => a.Key.StartsWith("duel_") || a.Key.StartsWith("npc_") || a.Key == "gym_wins").ToDictionary(x => x.Key, x => x.Value),
-            "breeding" => achievements.Where(a => a.Key.StartsWith("breed_") || a.Key.EndsWith("_bred")).ToDictionary(x => x.Key, x => x.Value),
-            "catching" => achievements.Where(a => a.Key.StartsWith("pokemon_") || a.Key.EndsWith("_caught")).ToDictionary(x => x.Key, x => x.Value),
-            "market" => achievements.Where(a => a.Key.StartsWith("market_") || a.Key.Contains("released")).ToDictionary(x => x.Key, x => x.Value),
-            "activities" => achievements.Where(a => a.Key is "fishing_success" or "missions" or "votes" || a.Key.StartsWith("game_")).ToDictionary(x => x.Key, x => x.Value),
-            "events" => achievements.Where(a => a.Key.Contains("event") || a.Key.StartsWith("chests_") || a.Key.Contains("donation")).ToDictionary(x => x.Key, x => x.Value),
-            "special" => achievements.Where(a => a.Key is "dex_complete").ToDictionary(x => x.Key, x => x.Value),
-            _ => achievements
-        };
-    }
+        string? category) => AchievementService.FilterByCategory(achievements, category);
 
     private async Task AddAchievementFieldsAsync(EmbedBuilder embed, Dictionary<string, int> achievements, ulong userId)
     {
@@ -299,32 +282,12 @@ public class AchievementsModule : EeveeModule<AchievementService>
         return $"`[{new string('█', filled)}{new string('░', length - filled)}]` {progress:P1}";
     }
 
-    private static LoyaltyTier CalculateLoyaltyTier(int points) => points switch
-    {
-        >= 50000 => new LoyaltyTier { RequiredPoints = 50000, TierName = "Diamond Elite", XpMultiplier = 2.5, ShopDiscount = 25, TierColor = AchievementConstants.DiamondTierColor, MonthlyBonus = 100000 },
-        >= 25000 => new LoyaltyTier { RequiredPoints = 25000, TierName = "Platinum Master", XpMultiplier = 2.0, ShopDiscount = 20, TierColor = AchievementConstants.PlatinumTierColor, MonthlyBonus = 50000 },
-        >= 10000 => new LoyaltyTier { RequiredPoints = 10000, TierName = "Gold Champion", XpMultiplier = 1.75, ShopDiscount = 15, TierColor = AchievementConstants.GoldTierColor, MonthlyBonus = 25000 },
-        >= 5000 => new LoyaltyTier { RequiredPoints = 5000, TierName = "Silver Expert", XpMultiplier = 1.5, ShopDiscount = 10, TierColor = AchievementConstants.SilverTierColor, MonthlyBonus = 10000 },
-        >= 1000 => new LoyaltyTier { RequiredPoints = 1000, TierName = "Bronze Trainer", XpMultiplier = 1.25, ShopDiscount = 5, TierColor = AchievementConstants.BronzeTierColor, MonthlyBonus = 5000 },
-        _ => new LoyaltyTier { RequiredPoints = 0, TierName = "Novice", XpMultiplier = 1.0, ShopDiscount = 0, TierColor = 0x808080, MonthlyBonus = 1000 }
-    };
+    private static LoyaltyTier CalculateLoyaltyTier(int points) => AchievementService.GetLoyaltyTier(points);
 
-    private static LoyaltyTier? GetNextLoyaltyTier(int currentPoints)
-    {
-        int[] tiers = [1000, 5000, 10000, 25000, 50000];
-        var nextTierPoints = tiers.FirstOrDefault(t => t > currentPoints);
-        return nextTierPoints > 0 ? CalculateLoyaltyTier(nextTierPoints) : null;
-    }
+    private static LoyaltyTier? GetNextLoyaltyTier(int currentPoints) =>
+        AchievementService.GetNextLoyaltyTier(currentPoints);
 
-    private static int GetNextStreakBonus(int currentStreak)
-    {
-        int[] bonuses = [3, 7, 14, 30];
-        return bonuses.FirstOrDefault(b => b > currentStreak);
-    }
+    private static int GetNextStreakBonus(int currentStreak) => AchievementService.GetNextStreakBonus(currentStreak);
 
-    private async Task<int> GetTotalMilestonesAsync(ulong userId)
-    {
-        await using var db = await Service.GetDbConnectionAsync();
-        return await db.MilestoneProgress.Where(mp => mp.UserId == userId).CountAsync();
-    }
+    private Task<int> GetTotalMilestonesAsync(ulong userId) => Service.GetTotalMilestonesAsync(userId);
 }

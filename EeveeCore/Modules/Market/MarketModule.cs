@@ -3,7 +3,6 @@ using EeveeCore.Common.Interactive;
 using EeveeCore.Common.ModuleBases;
 using EeveeCore.Modules.Market.Services;
 using EeveeCore.Modules.Pokemon.Services;
-using LinqToDB.Async;
 
 namespace EeveeCore.Modules.Market;
 
@@ -12,13 +11,11 @@ namespace EeveeCore.Modules.Market;
 /// </summary>
 /// <param name="tradeLockService">Keeps players in a trade out of the market.</param>
 /// <param name="pokemonService">Finds Pokémon sprites.</param>
-/// <param name="dbProvider">The database connection provider.</param>
 [Group("market")]
 [Name("Market")]
 public class MarketModule(
     ITradeLockService tradeLockService,
-    PokemonService pokemonService,
-    LinqToDbConnectionProvider dbProvider) : EeveeModule<MarketService>
+    PokemonService pokemonService) : EeveeModule<MarketService>
 {
     private const int ListingsPerPage = 5;
 
@@ -269,16 +266,10 @@ public class MarketModule(
 
     private async Task<bool> IsMarketBannedAsync()
     {
-        await using var db = await dbProvider.GetConnectionAsync();
-        var user = await db.Users
-            .Where(u => u.UserId == ctx.User.Id)
-            .Select(u => new { u.MarketBanned, u.MarketBanReason })
-            .FirstOrDefaultAsync();
-
-        if (user?.MarketBanned != true)
+        if (await Service.GetMarketBanReasonAsync(ctx.User.Id) is not { } reason)
             return false;
 
-        await ErrorAsync($"You are banned from using the market. Reason: {user.MarketBanReason ?? "Fraud detection"}");
+        await ErrorAsync($"You are banned from using the market. Reason: {reason}");
         return true;
     }
 

@@ -1,7 +1,7 @@
 namespace EeveeCore.Common;
 
 /// <summary>
-///     Constants for EeveeCore's fraud detection dashboard API.
+///     Constants for the PokeFlux dashboard API.
 /// </summary>
 public static class ApiConstants
 {
@@ -11,7 +11,12 @@ public static class ApiConstants
     public const string HeaderName = "X-API-Key";
 
     /// <summary>
-    ///     Default key name for configuration.
+    ///     The authorization policy that requires a valid API key.
     /// </summary>
-    public const string KeyName = "EeveeCoreApiKey";
+    public const string ApiKeyPolicy = "ApiKeyPolicy";
+
+    /// <summary>
+    ///     The authentication scheme name for the API key.
+    /// </summary>
+    public const string ApiKeyScheme = "ApiKey";
 }

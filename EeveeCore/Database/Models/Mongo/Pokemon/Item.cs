@@ -10,6 +10,23 @@ namespace EeveeCore.Database.Models.Mongo.Pokemon;
 public class Item
 {
     /// <summary>
+    ///     The identifiers of the item categories that <see cref="CategoryId" /> refers to, from PokeAPI's item data.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<int, string> CategoryIdentifiers = new Dictionary<int, string>
+    {
+        [1] = "stat-boosts", [2] = "effort-drop", [3] = "medicine", [4] = "other", [5] = "in-a-pinch",
+        [6] = "picky-healing", [7] = "type-protection", [8] = "baking-only", [9] = "collectibles",
+        [10] = "evolution", [11] = "spelunking", [12] = "held-items", [13] = "choice", [14] = "effort-training",
+        [15] = "bad-held-items", [16] = "training", [17] = "plates", [18] = "species-specific",
+        [19] = "type-enhancement", [20] = "event-items", [21] = "gameplay", [22] = "plot-advancement",
+        [23] = "unused", [24] = "loot", [25] = "all-mail", [26] = "vitamins", [27] = "healing",
+        [28] = "pp-recovery", [29] = "revival", [30] = "status-cures", [32] = "mulch", [33] = "special-balls",
+        [34] = "standard-balls", [35] = "dex-completion", [36] = "scarves", [37] = "all-machines",
+        [38] = "flutes", [39] = "apricorn-balls", [40] = "apricorn-box", [41] = "data-cards", [42] = "jewels",
+        [43] = "miracle-shooter", [44] = "mega-stones", [45] = "memories", [46] = "z-crystals"
+    };
+
+    /// <summary>
     ///     Gets or sets the MongoDB document identifier.
     /// </summary>
     [BsonId]

@@ -54,9 +54,8 @@
         <EmbeddedResource Include="Database\Migrations\*.sql" />
     </ItemGroup>
 
-    <!-- Controllers and autocompletes not yet rewritten for Fluxer. -->
+    <!-- Autocompletes not yet rewritten for Fluxer. -->
     <ItemGroup>
-        <Compile Remove="Controllers\**" />
         <Compile Remove="Common\AutoCompletes\**" />
         <Compile Remove="Common\Attributes\Interactions\**" />
         <Compile Remove="Common\ModuleBases\DittoSlashModuleBase.cs" />

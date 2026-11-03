@@ -1,5 +1,8 @@
 using EeveeCore.Database.Models.Mongo.Pokemon;
+using EeveeCore.Modules.Pokemon.Services;
 using EeveeCore.Services.Impl;
+using LinqToDB;
+using LinqToDB.Async;
 using MongoDB.Driver;
 
 namespace EeveeCore.Modules.Extras.Services;
@@ -9,7 +12,12 @@ namespace EeveeCore.Modules.Extras.Services;
 /// </summary>
 public class ExtrasService : INService
 {
+    private static readonly string[] BlockedNicknameWords =
+        ["@here", "@everyone", "http", "nigger", "nigga", "gay", "fag", "kike", "jew", "faggot"];
+
     private readonly IMongoService _mongoService;
+    private readonly LinqToDbConnectionProvider _dbProvider;
+    private readonly PokemonService _pokemonService;
     private readonly SemaphoreSlim _namesLock = new(1, 1);
     private List<string>? _pokemonNames;
 
@@ -17,10 +25,132 @@ public class ExtrasService : INService
     ///     Initializes a new instance of the <see cref="ExtrasService" /> class.
     /// </summary>
     /// <param name="mongoService">The MongoDB service for database operations.</param>
+    /// <param name="dbProvider">The database connection provider.</param>
+    /// <param name="pokemonService">The Pokémon service, for evolutions.</param>
     public ExtrasService(
-        IMongoService mongoService)
+        IMongoService mongoService,
+        LinqToDbConnectionProvider dbProvider,
+        PokemonService pokemonService)
     {
         _mongoService = mongoService;
+        _dbProvider = dbProvider;
+        _pokemonService = pokemonService;
+    }
+
+    /// <summary>
+    ///     Looks up the type, power, accuracy, PP and damage class of moves.
+    /// </summary>
+    /// <param name="moves">The move identifiers.</param>
+    /// <returns>The details of each move that was found, in the order given.</returns>
+    public async Task<List<MoveDetails>> GetMoveDetailsAsync(IEnumerable<string> moves)
+    {
+        var names = moves.Select(m => m.ToLower()).ToList();
+        var lookups = names
+            .SelectMany(m => m.Contains('-') ? new[] { m, m.Split('-')[0] } : [m])
+            .Distinct()
+            .ToList();
+        var moveInfos = (await _mongoService.Moves.Find(m => lookups.Contains(m.Identifier)).ToListAsync())
+            .GroupBy(m => m.Identifier)
+            .ToDictionary(g => g.Key, g => g.First());
+        var typeNames = (await _mongoService.Types.Find(_ => true).ToListAsync())
+            .GroupBy(t => t.TypeId)
+            .ToDictionary(g => g.Key, g => g.First().Identifier.Capitalize() ?? "Unknown");
+
+        var details = new List<MoveDetails>();
+        foreach (var name in names)
+        {
+            if (!moveInfos.TryGetValue(name, out var move) &&
+                !(name.Contains('-') && moveInfos.TryGetValue(name.Split('-')[0], out move)))
+                continue;
+
+            details.Add(new MoveDetails(name, typeNames.GetValueOrDefault(move.TypeId, "Unknown"), move.Power,
+                move.Accuracy, move.PP, move.DamageClassId switch
+                {
+                    1 => "Status",
+                    2 => "Physical",
+                    _ => "Special"
+                }));
+        }
+
+        return details;
+    }
+
+    /// <summary>
+    ///     Teaches one of a user's Pokémon a move it can learn, in one of its four slots.
+    /// </summary>
+    /// <param name="userId">The ID of the user.</param>
+    /// <param name="pokemonId">The ID of the Pokémon.</param>
+    /// <param name="slot">The slot, from 1 to 4.</param>
+    /// <param name="move">The move to learn.</param>
+    /// <returns>A tuple indicating success and a message.</returns>
+    public async Task<(bool Success, string Message)> LearnMoveAsync(ulong userId, ulong pokemonId, int slot,
+        string move)
+    {
+        if (slot is < 1 or > 4)
+            return (false, "The slot must be 1, 2, 3 or 4.");
+
+        await using var db = await _dbProvider.GetConnectionAsync();
+        var pokemon = await (
+            from ownership in db.UserPokemonOwnerships
+            join p in db.UserPokemon on ownership.PokemonId equals p.Id
+            where ownership.UserId == userId && p.Id == pokemonId
+            select p).FirstOrDefaultAsync();
+        if (pokemon == null)
+            return (false, "You do not have that Pokemon!");
+
+        var moves = await GetMoves(pokemon.PokemonName.ToLower());
+        if (moves == null)
+            return (false, "That pokemon cannot learn any moves! You might need to `/deform` it first.");
+
+        var resolved = move.Trim().Replace(" ", "-").ToLower();
+        if (!moves.Contains(resolved))
+        {
+            var guess = FindClosest(resolved, moves);
+            return (false, $"Your {pokemon.PokemonName} can not learn that Move" +
+                           (guess is null ? "" : $"\nDid you mean `{guess}`?"));
+        }
+
+        var currentMoves = pokemon.Moves.ToList();
+        while (currentMoves.Count < 4)
+            currentMoves.Add("tackle");
+        currentMoves[slot - 1] = resolved;
+
+        await db.UserPokemon.Where(p => p.Id == pokemon.Id)
+            .Set(p => p.Moves, currentMoves.ToArray())
+            .UpdateAsync();
+
+        await _pokemonService.TryEvolve(pokemon.Id);
+        return (true, $"You have successfully learned {resolved} as your slot {slot} move");
+    }
+
+    /// <summary>
+    ///     Sets or resets the nickname of one of a user's Pokémon.
+    /// </summary>
+    /// <param name="userId">The ID of the user.</param>
+    /// <param name="pokemonId">The ID of the Pokémon.</param>
+    /// <param name="nickname">The new nickname, or null or "None" to reset it.</param>
+    /// <returns>A tuple indicating success and a message.</returns>
+    public async Task<(bool Success, string Message)> SetNicknameAsync(ulong userId, ulong pokemonId,
+        string? nickname)
+    {
+        var nick = string.IsNullOrWhiteSpace(nickname) ? "None" : nickname;
+        if (nick.Length > 150)
+            return (false, "Nickname is too long!");
+
+        if (BlockedNicknameWords.Any(nick.Contains))
+            return (false, "Nope.");
+
+        await using var db = await _dbProvider.GetConnectionAsync();
+        if (!await db.UserPokemonOwnerships.AnyAsync(o => o.UserId == userId && o.PokemonId == pokemonId))
+            return (false, "You do not have that Pokemon!");
+
+        await db.UserPokemon.Where(p => p.Id == pokemonId)
+            .Set(p => p.Nickname, nick)
+            .UpdateAsync();
+
+        return (true, nick == "None"
+            ? "Successfully reset Pokemon nickname."
+            : $"Successfully changed Pokemon nickname to {nick}.");
     }
 
     /// <summary>
@@ -236,3 +366,14 @@ public class ExtrasService : INService
         return activeMissions.Any();
     }
 }
+
+/// <summary>
+///     The details of a move.
+/// </summary>
+/// <param name="Name">The move's identifier.</param>
+/// <param name="Type">The move's type.</param>
+/// <param name="Power">The move's power, or null for moves without one.</param>
+/// <param name="Accuracy">The move's accuracy, or null for moves that never miss.</param>
+/// <param name="PP">The move's power points.</param>
+/// <param name="Category">Physical, Special or Status.</param>
+public record MoveDetails(string Name, string Type, int? Power, int? Accuracy, int PP, string Category);

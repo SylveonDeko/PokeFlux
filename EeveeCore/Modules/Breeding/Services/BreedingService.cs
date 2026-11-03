@@ -94,6 +94,59 @@ public class BreedingService : INService
     }
 
     /// <summary>
+    ///     How long a mother rests after breeding.
+    /// </summary>
+    public static readonly TimeSpan MotherCooldown = TimeSpan.FromHours(2);
+
+    /// <summary>
+    ///     Gets how long a user must wait before breeding again.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    /// <returns>The time left, or zero when the user can breed.</returns>
+    public async Task<TimeSpan> GetBreedCooldownAsync(ulong userId)
+    {
+        var result = await _redisCache.Redis.GetDatabase().ExecuteAsync("HMGET", "breedcooldowns", userId.ToString());
+        if (result is not { Length: > 0 } || result[0] is null || !double.TryParse(result[0].ToString(), out var resetAt))
+            return TimeSpan.Zero;
+
+        var left = resetAt - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return left > 0 ? TimeSpan.FromSeconds(left) : TimeSpan.Zero;
+    }
+
+    /// <summary>
+    ///     Gets when the given Pokémon can next be bred as a mother.
+    /// </summary>
+    /// <param name="pokemonIds">The Pokémon IDs.</param>
+    /// <returns>When each Pokémon that is still resting can breed again.</returns>
+    public async Task<Dictionary<ulong, DateTime>> GetMotherCooldownsAsync(IReadOnlyCollection<ulong> pokemonIds)
+    {
+        await using var db = await _dbContextProvider.GetConnectionAsync();
+        var mothers = await db.Mothers
+            .Where(m => pokemonIds.Contains(m.PokemonId) && m.EntryTime != null)
+            .Select(m => new { m.PokemonId, m.EntryTime })
+            .ToListAsync();
+
+        var now = DateTime.UtcNow;
+        return mothers
+            .GroupBy(m => m.PokemonId)
+            .Select(g => (g.Key, Ends: g.Max(m => m.EntryTime!.Value).Add(MotherCooldown)))
+            .Where(m => m.Ends > now)
+            .ToDictionary(m => m.Key, m => m.Ends);
+    }
+
+    /// <summary>
+    ///     Gets how many eggs a user has and how many the daycare holds.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    public async Task<(int Eggs, int Limit)> GetDaycareUsageAsync(ulong userId)
+    {
+        await using var db = await _dbContextProvider.GetConnectionAsync();
+        var eggs = await db.UserPokemon.CountAsync(p => p.Owner == userId && p.PokemonName == "Egg");
+        var limit = await db.Users.Where(u => u.UserId == userId).Select(u => u.DaycareLimit).FirstOrDefaultAsync();
+        return (eggs, limit ?? 1);
+    }
+
+    /// <summary>
     ///     Clears all breeding female flags for a user.
     /// </summary>
     /// <param name="userId">The user's Discord ID.</param>
@@ -454,8 +507,7 @@ public class BreedingService : INService
         if (motherRecord != null)
         {
             // Check if the cooldown period has elapsed
-            var cooldownHours = 2; // 2-hour cooldown
-            var cooldownEnds = motherRecord.EntryTime?.AddHours(cooldownHours) ?? DateTime.UtcNow;
+            var cooldownEnds = motherRecord.EntryTime?.Add(MotherCooldown) ?? DateTime.UtcNow;
 
             if (DateTime.UtcNow < cooldownEnds)
             {
@@ -728,6 +780,24 @@ public class BreedingService : INService
         };
     }
 
+    private static int EggSteps(PokemonFile species) => species.HatchCounter.GetValueOrDefault() * 2;
+
+    /// <summary>
+    ///     Gets the steps a new egg of each species starts with.
+    /// </summary>
+    /// <param name="species">The species the eggs hold.</param>
+    /// <returns>The starting steps by lowercase species name, for the species that exist.</returns>
+    public async Task<Dictionary<string, int>> GetEggStepsAsync(IEnumerable<string> species)
+    {
+        var names = species.Where(s => !string.IsNullOrEmpty(s)).Select(s => s.ToLower()).Distinct().ToList();
+        if (names.Count == 0)
+            return [];
+
+        return (await _mongoService.PFile.Find(f => names.Contains(f.Identifier)).ToListAsync())
+            .GroupBy(f => f.Identifier)
+            .ToDictionary(g => g.Key, g => EggSteps(g.First()));
+    }
+
     /// <summary>
     ///     Generates a child Pokémon from two parents.
     /// </summary>
@@ -775,7 +845,7 @@ public class BreedingService : INService
         var name = pokemonPFile.Identifier;
         var genderRate = pokemonPFile.GenderRate;
         var id = pokemonPFile.PokemonId;
-        var counter = pokemonPFile.HatchCounter.GetValueOrDefault() * 2;
+        var counter = EggSteps(pokemonPFile);
 
         // Get ability IDs
         var abilityIds = new List<int>();

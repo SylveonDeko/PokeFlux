@@ -739,47 +739,23 @@ public class ExtrasModule(
         [Summary("Set or reset your selected pokemon's nickname. Leave it out to reset.")]
         public async Task SetNick([Remainder] string nick = "None")
         {
-            if (nick.Length > 150)
-            {
-                await ErrorAsync("Nickname is too long!");
-                return;
-            }
-
-            if (nick.Contains("@here") ||
-                nick.Contains("@everyone") ||
-                nick.Contains("http") ||
-                nick.Contains("nigger") ||
-                nick.Contains("nigga") ||
-                nick.Contains("gay") ||
-                nick.Contains("fag") ||
-                nick.Contains("kike") ||
-                nick.Contains("jew") ||
-                nick.Contains("faggot"))
-            {
-                await ErrorAsync("Nope.");
-                return;
-            }
-
             await using var db = await dbContextProvider.GetConnectionAsync();
             var selectedId = await db.Users
                 .Where(u => u.UserId == ctx.User.Id)
                 .Select(u => u.Selected)
                 .FirstOrDefaultAsync();
 
-            if (selectedId == null)
+            if (selectedId is null or 0)
             {
                 await ErrorAsync("You don't have a Pokémon selected!");
                 return;
             }
 
-            await db.UserPokemon.Where(p => p.Id == selectedId)
-                .Set(p => p.Nickname, nick)
-                .UpdateAsync();
-
-            if (nick == "None")
-                await ConfirmAsync("Successfully reset Pokemon nickname.");
+            var (success, message) = await Service.SetNicknameAsync(ctx.User.Id, selectedId.Value, nick);
+            if (success)
+                await ConfirmAsync(message);
             else
-                await ConfirmAsync($"Successfully changed Pokemon nickname to {nick}.");
+                await ErrorAsync(message);
         }
     }
 
@@ -1205,46 +1181,22 @@ public class ExtrasModule(
 
             await using var db = await dbContextProvider.GetConnectionAsync();
 
-            var selectedPokemon = await (
-                from pokemon in db.UserPokemon
-                join user in db.Users on pokemon.Id equals user.Selected
-                where user.UserId == ctx.User.Id
-                select pokemon
-            ).FirstOrDefaultAsync();
+            var selectedId = await db.Users
+                .Where(u => u.UserId == ctx.User.Id)
+                .Select(u => u.Selected)
+                .FirstOrDefaultAsync();
 
-            if (selectedPokemon == null)
+            if (selectedId is null or 0)
             {
                 await ErrorAsync("You do not have that Pokemon!");
                 return;
             }
 
-            var pokemonName = selectedPokemon.PokemonName;
-            var moves = await Service.GetMoves(pokemonName.ToLower());
-
-            if (moves == null)
-            {
-                await ErrorAsync(
-                    $"That pokemon cannot learn any moves! You might need to `{await GetPrefixAsync()}deform` it first.");
-                Log.Warning("Could not get moves for {Pokemon}", pokemonName);
-                return;
-            }
-
-            var resolved = await ResolveMoveAsync(move, moves, pokemonName, "");
-            if (resolved is null)
-                return;
-
-            var currentMoves = selectedPokemon.Moves.ToList();
-            while (currentMoves.Count < 4)
-                currentMoves.Add("tackle");
-            currentMoves[slot - 1] = resolved;
-
-            await db.UserPokemon.Where(p => p.Id == selectedPokemon.Id)
-                .Set(p => p.Moves, currentMoves.ToArray())
-                .UpdateAsync();
-
-            await ConfirmAsync($"You have successfully learned {resolved} as your slot {slot} move");
-
-            await pokemonService.TryEvolve(selectedPokemon.Id);
+            var (success, message) = await Service.LearnMoveAsync(ctx.User.Id, selectedId.Value, slot, move);
+            if (success)
+                await ConfirmAsync(message);
+            else
+                await ErrorAsync(message.Replace("`/", $"`{await GetPrefixAsync()}"));
         }
 
         /// <summary>
@@ -1324,42 +1276,25 @@ public class ExtrasModule(
                 return;
             }
 
-            var lookups = moves.Select(m => m.ToLower())
-                .SelectMany(m => m.Contains('-') ? new[] { m, m.Split('-')[0] } : [m])
-                .Distinct()
-                .ToList();
-            var moveInfos = (await mongoService.Moves.Find(m => lookups.Contains(m.Identifier)).ToListAsync())
-                .GroupBy(m => m.Identifier)
-                .ToDictionary(g => g.Key, g => g.First());
-            var typeNames = (await mongoService.Types.Find(_ => true).ToListAsync())
-                .GroupBy(t => t.TypeId)
-                .ToDictionary(g => g.Key, g => g.First().Identifier.Capitalize() ?? "Unknown");
-
-            var lines = new List<string>();
-            foreach (var move in moves)
+            var details = await Service.GetMoveDetailsAsync(moves);
+            if (details.Count != moves.Count)
             {
-                var lowercaseMove = move.ToLower();
-                if (!moveInfos.TryGetValue(lowercaseMove, out var moveInfo) &&
-                    !(lowercaseMove.Contains('-') && moveInfos.TryGetValue(lowercaseMove.Split('-')[0], out moveInfo)))
-                {
-                    await ErrorAsync("An error occurred finding moves for that pokemon.");
-                    Log.Warning("A move is not in mongo moves - {Move}", move);
-                    return;
-                }
+                await ErrorAsync("An error occurred finding moves for that pokemon.");
+                Log.Warning("A move of {Pokemon} is not in mongo moves", pokemonName);
+                return;
+            }
 
-                var damageClass = moveInfo.DamageClassId switch
+            var lines = details.Select(move =>
+            {
+                var damageClass = move.Category switch
                 {
-                    1 => Emojis.Status,
-                    2 => Emojis.Physical,
+                    "Status" => Emojis.Status,
+                    "Physical" => Emojis.Physical,
                     _ => Emojis.Special
                 };
-
-                var typeName = typeNames.GetValueOrDefault(moveInfo.TypeId, "Unknown");
-                var formattedMove = move.Capitalize()!.Replace("'", "").Replace("-", " ");
-
-                lines.Add(
-                    $"**{damageClass} {formattedMove}** - Power:`{moveInfo.Power}` Acc:`{moveInfo.Accuracy}` Type:`{typeName}`");
-            }
+                var formattedMove = move.Name.Capitalize()!.Replace("'", "").Replace("-", " ");
+                return $"**{damageClass} {formattedMove}** - Power:`{move.Power}` Acc:`{move.Accuracy}` Type:`{move.Type}`";
+            }).ToList();
 
             var pageCount = Math.Max(1, (lines.Count + MovesetPageSize - 1) / MovesetPageSize);
             await Reactions.PaginateAsync(ctx.Channel, ctx.User.Id, pageCount, index =>

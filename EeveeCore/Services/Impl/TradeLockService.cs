@@ -44,26 +44,30 @@ public class TradeLockService : ITradeLockService, INService
     }
 
     /// <inheritdoc />
-    public async Task<bool> ExecuteWithTradeLockAsync(IUser user, Func<Task> action)
+    public Task<bool> ExecuteWithTradeLockAsync(IUser user, Func<Task> action) =>
+        ExecuteWithTradeLockAsync(user.Id, action);
+
+    /// <inheritdoc />
+    public async Task<bool> ExecuteWithTradeLockAsync(ulong userId, Func<Task> action)
     {
         // Check if user is already trade locked
-        if (await IsUserTradeLockedAsync(user.Id))
+        if (await IsUserTradeLockedAsync(userId))
             return false;
 
         try
         {
             // Add trade lock
-            await AddTradeLockAsync(user.Id);
-            
+            await AddTradeLockAsync(userId);
+
             // Execute the action
             await action();
-            
+
             return true;
         }
         finally
         {
             // Always remove trade lock
-            await RemoveTradeLockAsync(user.Id);
+            await RemoveTradeLockAsync(userId);
         }
     }
 

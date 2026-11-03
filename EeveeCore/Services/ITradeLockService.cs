@@ -33,6 +33,14 @@ public interface ITradeLockService
     Task<bool> ExecuteWithTradeLockAsync(IUser user, Func<Task> action);
 
     /// <summary>
+    ///     Executes an action while holding a trade lock for a single user.
+    /// </summary>
+    /// <param name="userId">The ID of the user to lock.</param>
+    /// <param name="action">The action to execute while locked.</param>
+    /// <returns>True if the action was executed successfully, false if the user was already locked.</returns>
+    Task<bool> ExecuteWithTradeLockAsync(ulong userId, Func<Task> action);
+
+    /// <summary>
     ///     Executes an action while holding trade locks for two users.
     /// </summary>
     /// <param name="user1">The first user to lock.</param>

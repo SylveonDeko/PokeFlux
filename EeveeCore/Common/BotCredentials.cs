@@ -90,31 +90,20 @@ public class BotCredentials : IBotCredentials
         // Web API Configuration
         IsApiEnabled = bool.Parse(config[nameof(IsApiEnabled)] ?? "false");
         ApiPort = int.Parse(config[nameof(ApiPort)] ?? "5000");
-        JwtSecret = config[nameof(JwtSecret)] ?? "DefaultJwtSecret";
-        DiscordClientId = config[nameof(DiscordClientId)] ?? "DefaultDiscordClientId";
-        DiscordClientSecret = config[nameof(DiscordClientSecret)] ?? "DefaultDiscordClientSecret";
+        JwtSecret = config[nameof(JwtSecret)];
+        ApiKey = config[nameof(ApiKey)];
     }
 
     /// <summary>
-    ///     Gets the JWT secret key for token signing and validation.
+    ///     Gets the secret the dashboard signs user tokens with, or null to reject every user token.
     /// </summary>
-    public string JwtSecret { get; private set; } = null!;
+    public string? JwtSecret { get; }
 
     /// <summary>
     ///     Gets the address of a self-hosted Fluxer instance to connect to, or null for fluxer.app.
     /// </summary>
     public string? FluxerInstanceUrl { get; }
-    
-    /// <summary>
-    ///     Gets the Discord client ID for OAuth authentication.
-    /// </summary>
-    public string DiscordClientId { get; private set; } = null!;
-    
-    /// <summary>
-    ///     Gets the Discord client secret for OAuth authentication.
-    /// </summary>
-    public string DiscordClientSecret { get; private set; } = null!;
-    
+
     /// <summary>
     ///     Gets the Discord bot token used for authentication.
     /// </summary>
@@ -196,9 +185,9 @@ public class BotCredentials : IBotCredentials
     public int ApiPort { get; }
 
     /// <summary>
-    ///     Gets the API key for authentication.
+    ///     Gets the key the dashboard sends in the X-API-Key header, or null to reject every request.
     /// </summary>
-    public string ApiKey { get; }
+    public string? ApiKey { get; }
 
     /// <summary>
     ///     Gets or sets the collection of user IDs that have owner privileges.
@@ -282,9 +271,9 @@ public interface IBotCredentials
     int ApiPort { get; }
 
     /// <summary>
-    ///     Gets the API key for authentication.
+    ///     Gets the key the dashboard sends in the X-API-Key header, or null to reject every request.
     /// </summary>
-    string ApiKey { get; }
+    string? ApiKey { get; }
 
     /// <summary>
     ///     Determines whether a user has owner privileges.

@@ -57,7 +57,21 @@ public class MarketService : INService
     private readonly FluxerClient _client;
     private readonly BotLog _botLog;
     private const string MarketLockKey = "marketlock";
-    private const int BaseMarketLimit = 30;
+
+    /// <summary>
+    ///     How many active listings a user may have at once.
+    /// </summary>
+    public const int BaseMarketLimit = 30;
+
+    /// <summary>
+    ///     The lowest listing price; lower prices are raised to it.
+    /// </summary>
+    public const int MinListingPrice = 0;
+
+    /// <summary>
+    ///     The highest listing price.
+    /// </summary>
+    public const int MaxListingPrice = int.MaxValue;
 
     /// <summary>
     ///     Initializes a new instance of the <see cref="MarketService" /> class.
@@ -79,8 +93,8 @@ public class MarketService : INService
     {
         try
         {
-            price = Math.Max(price, 0);
-            if (price > int.MaxValue)
+            price = Math.Max(price, MinListingPrice);
+            if (price > MaxListingPrice)
                 return MarketResult.FromError("Price too high.");
 
             if (pokemonPosition <= 1)
@@ -120,9 +134,7 @@ public class MarketService : INService
                 return MarketResult.FromError($"You cannot market your {pokemon.PokemonName} as it is favorited.\n" +
                                               $"Unfavorite it first with `/fav remove {pokemonPosition}`.");
 
-            // Check current listings
-            var currentListings = await db.Market
-                .CountAsync(m => m.OwnerId == userId && m.BuyerId == null);
+            var currentListings = await GetActiveListingCountAsync(userId);
 
             if (currentListings >= BaseMarketLimit)
                 return MarketResult.FromError(
@@ -374,6 +386,32 @@ public class MarketService : INService
     }
 
     /// <summary>
+    ///     Counts a user's listings that have no buyer yet.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    public async Task<int> GetActiveListingCountAsync(ulong userId)
+    {
+        await using var db = await _dbProvider.GetConnectionAsync();
+        return await db.Market.CountAsync(m => m.OwnerId == userId && m.BuyerId == null);
+    }
+
+    /// <summary>
+    ///     Gets why a user is banned from the market.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    /// <returns>The ban reason, or null when the user is not banned.</returns>
+    public async Task<string?> GetMarketBanReasonAsync(ulong userId)
+    {
+        await using var db = await _dbProvider.GetConnectionAsync();
+        var user = await db.Users
+            .Where(u => u.UserId == userId)
+            .Select(u => new { u.MarketBanned, u.MarketBanReason })
+            .FirstOrDefaultAsync();
+
+        return user?.MarketBanned == true ? user.MarketBanReason ?? "Fraud detection" : null;
+    }
+
+    /// <summary>
     ///     Logs a market listing, removal or sale to the bot log.
     /// </summary>
     /// <param name="message">The log message.</param>
@@ -395,6 +433,8 @@ public class MarketService : INService
             select new MarketListingEntry
             {
                 ListingId = market.Id,
+                PokemonId = pokemon.Id,
+                ListedAt = market.ListedAt,
                 PokemonName = pokemon.PokemonName,
                 Level = pokemon.Level,
                 Price = market.Price,
@@ -480,7 +520,17 @@ public class MarketListingEntry
     ///     Gets or sets the unique identifier for the market listing.
     /// </summary>
     public ulong ListingId { get; set; }
-    
+
+    /// <summary>
+    ///     Gets or sets the ID of the listed Pokemon.
+    /// </summary>
+    public ulong PokemonId { get; set; }
+
+    /// <summary>
+    ///     Gets or sets when the Pokemon was listed.
+    /// </summary>
+    public DateTime ListedAt { get; set; }
+
     /// <summary>
     ///     Gets or sets the name of the Pokemon.
     /// </summary>

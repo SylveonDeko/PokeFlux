@@ -92,18 +92,11 @@ public class GuildSettingsService : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(guild);
         ArgumentNullException.ThrowIfNull(prefix);
 
-        var config = await GetGuildConfigAsync(guild.Id);
-        config.Prefix = prefix;
+        await GetGuildConfigAsync(guild.Id);
+        await _mongo.Guilds.UpdateOneAsync(g => g.GuildId == guild.Id,
+            Builders<Guild>.Update.Set(g => g.Prefix, prefix));
 
-        _changeTracker.AddOrUpdate(guild.Id,
-            _ => new GuildConfigChanged { LastModified = DateTime.UtcNow },
-            (_, existing) =>
-            {
-                existing.LastModified = DateTime.UtcNow;
-                return existing;
-            });
-
-        await _updateChannel.Writer.WriteAsync((guild.Id, config));
+        await _cache.RemoveFromCache(string.Format(ConfigCacheKey, guild.Id));
         await _cache.RemoveFromCache(string.Format(PrefixCacheKey, guild.Id));
 
         return prefix;

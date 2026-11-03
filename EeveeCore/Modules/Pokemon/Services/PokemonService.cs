@@ -49,6 +49,20 @@ public class PokemonService(
     }
 
     /// <summary>
+    ///     Counts the Pokemon of one species a user owns.
+    /// </summary>
+    /// <param name="userId">The ID of the user.</param>
+    /// <param name="pokemonName">The species identifier.</param>
+    /// <returns>How many the user owns, and how many of those are shiny.</returns>
+    public async Task<(int Count, int Shiny)> CountOwnedSpecies(ulong userId, string pokemonName)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+        var name = pokemonName.ToLower();
+        var owned = db.UserPokemon.Where(p => p.Owner == userId && p.PokemonName.ToLower() == name);
+        return (await owned.CountAsync(), await owned.CountAsync(p => p.Shiny == true));
+    }
+
+    /// <summary>
     ///     Gets a Pokemon by its ID.
     /// </summary>
     /// <param name="pokemonId">The ID of the Pokemon.</param>
@@ -163,48 +177,142 @@ public class PokemonService(
     {
         try
         {
-            // Get base name using the same logic as Python
-            var formParts = pokemonName.ToLower().Split('-');
-            var formSuffix = formParts.Length > 1 ? formParts[^1] : "";
-            var baseName = "";
-
-            switch (formSuffix)
-            {
-                case "blaze" or "aqua":
-                    baseName = "tauros-paldea";
-                    break;
-                case "alola" or "galar" or "hisui" or "paldea":
-                    formSuffix = "";
-                    break;
-            }
-
-            if (formSuffix == "zen-galar") baseName = "darmanitan-galar";
-
-            if (string.IsNullOrEmpty(baseName))
-                baseName = !string.IsNullOrEmpty(formSuffix)
-                    ? pokemonName.ToLower().Replace(formSuffix, "").TrimEnd('-')
-                    : pokemonName.ToLower();
-
-            var pfile = await mongo.PFile
-                .Find(p => p.Identifier == baseName)
-                .FirstOrDefaultAsync();
-
-            if (pfile == null)
+            var rawEvos = await GetEvolutionFamily(pokemonName);
+            if (rawEvos.Count < 2)
                 return "";
 
-            var rawEvos = await mongo.PFile
-                .Find(p => p.EvolutionChainId == pfile.EvolutionChainId)
-                .ToListAsync();
-
-            // Get evolution line starting from the first in the chain (no evolves_from)
-            var evoLine = await GetKids(rawEvos, pfile.PokemonId.Value, "");
-            return evoLine;
+            var lines = "";
+            foreach (var root in EvolutionRoots(rawEvos))
+                lines += $"{root.Identifier}\n" + await GetKids(rawEvos, root.PokemonId!.Value, "");
+            return lines;
         }
         catch (Exception e)
         {
             Log.Error(e, "Error getting evolution line for {PokemonName}", pokemonName);
             return "";
         }
+    }
+
+    /// <summary>
+    ///     Gets the species of a Pokemon's evolution family, each before the species it evolves into.
+    /// </summary>
+    /// <param name="pokemonName">The name of the Pokemon.</param>
+    /// <returns>The species, or an empty list when the Pokemon does not evolve.</returns>
+    public async Task<List<PokemonFile>> GetEvolutionChain(string? pokemonName)
+    {
+        try
+        {
+            var rawEvos = await GetEvolutionFamily(pokemonName);
+            var chain = new List<PokemonFile>();
+            if (rawEvos.Count < 2)
+                return chain;
+
+            void Add(PokemonFile poke)
+            {
+                chain.Add(poke);
+                foreach (var kid in rawEvos.Where(p => p.EvolvesFromSpeciesId == poke.PokemonId)
+                             .OrderBy(p => p.PokemonId))
+                    Add(kid);
+            }
+
+            foreach (var root in EvolutionRoots(rawEvos))
+                Add(root);
+            return chain;
+        }
+        catch (Exception e)
+        {
+            Log.Error(e, "Error getting evolution chain for {PokemonName}", pokemonName);
+            return [];
+        }
+    }
+
+    private static IEnumerable<PokemonFile> EvolutionRoots(List<PokemonFile> rawEvos) =>
+        rawEvos.Where(p => p.EvolvesFromSpeciesId is null || rawEvos.All(e => e.PokemonId != p.EvolvesFromSpeciesId))
+            .OrderBy(p => p.PokemonId);
+
+    private async Task<List<PokemonFile>> GetEvolutionFamily(string? pokemonName)
+    {
+        if (string.IsNullOrEmpty(pokemonName))
+            return [];
+
+        // Species such as mr-rime and regional forms have their own entry; other forms use their base species
+        var name = pokemonName.ToLower();
+        var pfile = await mongo.PFile.Find(p => p.Identifier == name).FirstOrDefaultAsync();
+        if (pfile is null)
+        {
+            var baseName = EvolutionBaseName(pokemonName);
+            pfile = await mongo.PFile.Find(p => p.Identifier == baseName).FirstOrDefaultAsync();
+        }
+
+        if (pfile?.EvolutionChainId is null)
+            return [];
+
+        var family = await mongo.PFile
+            .Find(p => p.EvolutionChainId == pfile.EvolutionChainId)
+            .ToListAsync();
+        return VariantLine(family, pfile);
+    }
+
+    // Regional variants can share a chain with the originals; keep only the branches of the Pokemon's own variant
+    private static List<PokemonFile> VariantLine(List<PokemonFile> family, PokemonFile target)
+    {
+        var byId = family.Where(p => p.PokemonId is not null)
+            .GroupBy(p => p.PokemonId!.Value)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        List<int> Ancestors(PokemonFile poke)
+        {
+            var ancestors = new List<int>();
+            while (poke.EvolvesFromSpeciesId is { } parent && !ancestors.Contains(parent) &&
+                   byId.TryGetValue(parent, out var next))
+            {
+                ancestors.Add(parent);
+                poke = next;
+            }
+
+            return ancestors;
+        }
+
+        var targetAncestors = Ancestors(target);
+        bool Related(PokemonFile poke) =>
+            poke.PokemonId == target.PokemonId ||
+            (poke.PokemonId is { } id && targetAncestors.Contains(id)) ||
+            (target.PokemonId is { } targetId && Ancestors(poke).Contains(targetId));
+
+        var dropped = family
+            .Where(p => p.Variant != target.Variant && !Related(p) && p.PokemonId is not null)
+            .Select(p => p.PokemonId!.Value)
+            .ToHashSet();
+        return family
+            .Where(p => p.PokemonId is not { } id || !dropped.Contains(id))
+            .Where(p => !Ancestors(p).Any(dropped.Contains))
+            .ToList();
+    }
+
+    private static string EvolutionBaseName(string pokemonName)
+    {
+        var formParts = pokemonName.ToLower().Split('-');
+        var formSuffix = formParts.Length > 1 ? formParts[^1] : "";
+        var baseName = "";
+
+        switch (formSuffix)
+        {
+            case "blaze" or "aqua":
+                baseName = "tauros-paldea";
+                break;
+            case "alola" or "galar" or "hisui" or "paldea":
+                formSuffix = "";
+                break;
+        }
+
+        if (formSuffix == "zen-galar") baseName = "darmanitan-galar";
+
+        if (string.IsNullOrEmpty(baseName))
+            baseName = !string.IsNullOrEmpty(formSuffix)
+                ? pokemonName.ToLower().Replace(formSuffix, "").TrimEnd('-')
+                : pokemonName.ToLower();
+
+        return baseName;
     }
 
     /// <summary>
@@ -492,6 +600,65 @@ public class PokemonService(
             await transaction.RollbackAsync();
             throw;
         }
+    }
+
+    /// <summary>
+    ///     Releases one of a user's Pokémon, unless it is their first, favorited, in their party or in a hatchery.
+    /// </summary>
+    /// <param name="userId">The ID of the user.</param>
+    /// <param name="pokemonId">The ID of the Pokémon.</param>
+    /// <returns>A tuple indicating success and a message.</returns>
+    public async Task<(bool Success, string Message)> ReleasePokemonAsync(ulong userId, ulong pokemonId)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+
+        var ownership = await db.UserPokemonOwnerships
+            .FirstOrDefaultAsync(o => o.UserId == userId && o.PokemonId == pokemonId);
+        var pokemon = ownership is null ? null : await db.UserPokemon.FirstOrDefaultAsync(p => p.Id == pokemonId);
+        if (ownership is null || pokemon is null)
+            return (false, "That pokemon does not exist!");
+
+        if (ownership.Position == 0)
+            return (false, "You cannot release your first Pokemon.");
+
+        if (pokemon.Favorite)
+            return (false, $"You cannot release your {pokemon.PokemonName} as it is favorited.");
+
+        if (await db.Market.AnyAsync(m => m.PokemonId == pokemonId && m.BuyerId == null))
+            return (false, $"Your {pokemon.PokemonName} is listed on the market.");
+
+        if (await db.Parties.AnyAsync(p => p.UserId == userId && p.IsCurrentParty &&
+                                           (p.Slot1 == pokemonId || p.Slot2 == pokemonId || p.Slot3 == pokemonId ||
+                                            p.Slot4 == pokemonId || p.Slot5 == pokemonId || p.Slot6 == pokemonId)))
+            return (false, $"Your {pokemon.PokemonName} is in your party. Remove it from your party first.");
+
+        if (await db.EggHatcheries.AnyAsync(h => h.UserId == userId &&
+                                                 (h.Slot1 == pokemonId || h.Slot2 == pokemonId ||
+                                                  h.Slot3 == pokemonId || h.Slot4 == pokemonId ||
+                                                  h.Slot5 == pokemonId || h.Slot6 == pokemonId ||
+                                                  h.Slot7 == pokemonId || h.Slot8 == pokemonId ||
+                                                  h.Slot9 == pokemonId || h.Slot10 == pokemonId)))
+            return (false, "That Egg is in your hatchery. Take it out of the hatchery first.");
+
+        await RemoveUserPokemon(userId, pokemonId, true);
+        return (true, $"You have successfully released your {pokemon.PokemonName}!");
+    }
+
+    /// <summary>
+    ///     Favorites or unfavorites one of a user's Pokémon.
+    /// </summary>
+    /// <param name="userId">The ID of the user.</param>
+    /// <param name="pokemonId">The ID of the Pokémon.</param>
+    /// <param name="favorite">Whether the Pokémon is a favorite.</param>
+    /// <returns>A tuple indicating success and a message.</returns>
+    public async Task<(bool Success, string Message)> SetFavoriteAsync(ulong userId, ulong pokemonId, bool favorite)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+        if (!await db.UserPokemonOwnerships.AnyAsync(o => o.UserId == userId && o.PokemonId == pokemonId))
+            return (false, "That pokemon does not exist!");
+
+        await db.UserPokemon.Where(p => p.Id == pokemonId).Set(p => p.Favorite, favorite).UpdateAsync();
+        return (true, favorite ? "Added to your favorites." : "Removed from your favorites.");
     }
 
     /// <summary>
@@ -941,10 +1108,13 @@ public class PokemonService(
     /// <param name="filter">Filter to apply (all, shiny, radiant, etc).</param>
     /// <param name="gender">Gender filter to apply (all, male, female, genderless).</param>
     /// <param name="search">Optional search term.</param>
+    /// <param name="heldItem">Only Pokemon holding this item, when set.</param>
+    /// <param name="breedable">Only Pokemon that can go on the breeding list: females and Dittos.</param>
     /// <returns>A tuple with filtered Pokemon list, collection statistics, and user data for display.</returns>
     public async Task<(List<PokemonListEntry> FilteredList, Dictionary<string, int> Stats, HashSet<ulong> PartyPokemon,
             ulong? SelectedPokemon)>
-        GetFilteredPokemonList(ulong userId, SortOrder sortOrder, string filter, string gender, string search)
+        GetFilteredPokemonList(ulong userId, SortOrder sortOrder, string filter, string gender, string search,
+            string? heldItem = null, bool breedable = false)
     {
         try
         {
@@ -985,6 +1155,8 @@ public class PokemonService(
                         where ownership.UserId == userId
                         select new { Pokemon = pokemon, ownership.Position };
 
+            var totalCount = await query.CountAsync();
+
             // For market filter, we need a different query that gets Pokemon from market listings
             if (filter == "market")
             {
@@ -997,8 +1169,6 @@ public class PokemonService(
                         }; // Use market ID as position for market listings
             }
 
-            var totalCount = await query.CountAsync();
-
             // Apply filter
             query = filter switch
             {
@@ -1009,15 +1179,25 @@ public class PokemonService(
                 "favorite" => query.Where(p => p.Pokemon.Favorite),
                 "champion" => query.Where(p => p.Pokemon.Champion),
                 "party" => query.Where(p => partyLookup.Contains(p.Pokemon.Id)),
-                "market" => query.Where(p => p.Pokemon.MarketEnlist),
+                "egg" => query.Where(p => p.Pokemon.PokemonName.ToLower() == "egg"),
                 _ => query
             };
+
+            if (!string.IsNullOrWhiteSpace(heldItem))
+            {
+                var item = heldItem.Trim().ToLower();
+                query = query.Where(p => p.Pokemon.HeldItem != null && p.Pokemon.HeldItem.ToLower() == item);
+            }
+
+            // The breeding list accepts females and Dittos
+            if (breedable)
+                query = query.Where(p => p.Pokemon.Gender == "-f" || p.Pokemon.PokemonName.ToLower() == "ditto");
 
             query = gender switch
             {
                 "male" => query.Where(p => p.Pokemon.Gender == "-m"),
                 "female" => query.Where(p => p.Pokemon.Gender == "-f"),
-                "genderless" => query.Where(p => p.Pokemon.Gender == "-x"),
+                "genderless" => query.Where(p => p.Pokemon.Gender != "-m" && p.Pokemon.Gender != "-f"),
                 _ => query
             };
 
@@ -1030,6 +1210,9 @@ public class PokemonService(
                     (p.Pokemon.Nickname != null && p.Pokemon.Nickname.ToLower().Contains(searchLower)));
             }
 
+            // A Pokemon is listed while it has a market listing without a buyer
+            var activeListings = db.GetTable<Database.Linq.Models.Game.Market>().Where(m => m.BuyerId == null);
+
             // Calculate all stats in a single query using conditional aggregation
             var statsData = await query
                 .Select(p => new
@@ -1041,10 +1224,10 @@ public class PokemonService(
                     Legendary = PokemonList.LegendList.Contains(p.Pokemon.PokemonName) ? 1 : 0,
                     Favorite = p.Pokemon.Favorite ? 1 : 0,
                     Champion = p.Pokemon.Champion ? 1 : 0,
-                    Market = p.Pokemon.MarketEnlist ? 1 : 0,
+                    Market = activeListings.Any(m => m.PokemonId == p.Pokemon.Id) ? 1 : 0,
                     Male = p.Pokemon.Gender == "-m" ? 1 : 0,
                     Female = p.Pokemon.Gender == "-f" ? 1 : 0,
-                    Genderless = p.Pokemon.Gender == "-x" ? 1 : 0
+                    Genderless = p.Pokemon.Gender != "-m" && p.Pokemon.Gender != "-f" ? 1 : 0
                 })
                 .ToListAsync();
 
@@ -1065,17 +1248,19 @@ public class PokemonService(
             };
 
             // Apply sorting
+            // Ties keep collection order, so the same list comes back in the same order every time
             query = sortOrder switch
             {
                 SortOrder.Iv => query.OrderByDescending(p =>
                     p.Pokemon.HpIv + p.Pokemon.AttackIv + p.Pokemon.DefenseIv +
-                    p.Pokemon.SpecialAttackIv + p.Pokemon.SpecialDefenseIv + p.Pokemon.SpeedIv),
-                SortOrder.Level => query.OrderByDescending(p => p.Pokemon.Level),
-                SortOrder.Name => query.OrderBy(p => p.Pokemon.PokemonName),
-                SortOrder.Recent => query.OrderByDescending(p => p.Pokemon.Timestamp),
-                SortOrder.Favorite => query.OrderByDescending(p => p.Pokemon.Favorite),
-                SortOrder.Party => query.OrderByDescending(p => partyLookup.Contains(p.Pokemon.Id)),
-                SortOrder.Champion => query.OrderByDescending(p => p.Pokemon.Champion),
+                    p.Pokemon.SpecialAttackIv + p.Pokemon.SpecialDefenseIv + p.Pokemon.SpeedIv).ThenBy(p => p.Position),
+                SortOrder.Level => query.OrderByDescending(p => p.Pokemon.Level).ThenBy(p => p.Position),
+                SortOrder.Name => query.OrderBy(p => p.Pokemon.PokemonName).ThenBy(p => p.Position),
+                SortOrder.Recent => query.OrderByDescending(p => p.Pokemon.Timestamp).ThenBy(p => p.Position),
+                SortOrder.Favorite => query.OrderByDescending(p => p.Pokemon.Favorite).ThenBy(p => p.Position),
+                SortOrder.Party => query.OrderByDescending(p => partyLookup.Contains(p.Pokemon.Id))
+                    .ThenBy(p => p.Position),
+                SortOrder.Champion => query.OrderByDescending(p => p.Pokemon.Champion).ThenBy(p => p.Position),
                 _ => query.OrderBy(p => p.Position) // Default sort by position (index in collection)
             };
 
@@ -1095,7 +1280,7 @@ public class PokemonService(
                 p.Pokemon.Timestamp,
                 p.Pokemon.Favorite,
                 p.Pokemon.Champion,
-                p.Pokemon.MarketEnlist,
+                MarketEnlist = activeListings.Any(m => m.PokemonId == p.Pokemon.Id),
                 p.Pokemon.HeldItem,
                 p.Pokemon.Moves,
                 p.Pokemon.Tags,
@@ -1933,6 +2118,21 @@ public class PokemonService(
                 abilityIndex);
             return "Unknown";
         }
+    }
+
+    /// <summary>
+    ///     Gets a trainer's nickname.
+    /// </summary>
+    /// <param name="userId">The ID of the user/trainer.</param>
+    /// <returns>The nickname, or null when the trainer has none.</returns>
+    public async Task<string?> GetTrainerNickname(ulong userId)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+        var nickname = await db.Users
+            .Where(u => u.UserId == userId)
+            .Select(u => u.TrainerNickname)
+            .FirstOrDefaultAsync();
+        return string.IsNullOrWhiteSpace(nickname) ? null : nickname;
     }
 
     /// <summary>

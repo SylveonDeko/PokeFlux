@@ -451,6 +451,41 @@ public class HatcheryService(
     }
 
     /// <summary>
+    ///     Gets the slots of a user's three hatchery groups.
+    /// </summary>
+    /// <param name="userId">The ID of the user.</param>
+    /// <returns>Each group with its speed, the slots the user can use and the egg in every slot.</returns>
+    public async Task<List<HatcheryGroupView>> GetHatcheryGroupsAsync(ulong userId)
+    {
+        var maxSlots = await GetPatreonTier(userId) switch
+        {
+            PatreonTier.Crystal => 10,
+            PatreonTier.Gold => 7,
+            _ => 6
+        };
+
+        await using var db = await dbContext.GetConnectionAsync();
+        var hatcheries = await db.EggHatcheries.Where(h => h.UserId == userId).ToListAsync();
+
+        var groups = new List<HatcheryGroupView>();
+        for (short group = 1; group <= 3; group++)
+        {
+            var hatchery = hatcheries.FirstOrDefault(h => h.Group == group);
+            ulong?[] slots = hatchery is null
+                ? new ulong?[10]
+                :
+                [
+                    hatchery.Slot1, hatchery.Slot2, hatchery.Slot3, hatchery.Slot4, hatchery.Slot5,
+                    hatchery.Slot6, hatchery.Slot7, hatchery.Slot8, hatchery.Slot9, hatchery.Slot10
+                ];
+            groups.Add(new HatcheryGroupView(group, await GetHatcherySpeedModifier(userId, group, 0), maxSlots,
+                slots));
+        }
+
+        return groups;
+    }
+
+    /// <summary>
     ///     Adds an egg to a specific slot in a hatchery group.
     ///     Performs validation checks for slot access based on Patreon tier.
     /// </summary>
@@ -1248,6 +1283,15 @@ public class HatcheryService(
         }
     }
 }
+
+/// <summary>
+///     One of a user's hatchery groups.
+/// </summary>
+/// <param name="Group">The group number, 1 to 3.</param>
+/// <param name="SpeedModifier">How many steps each message takes off the eggs in this group.</param>
+/// <param name="MaxSlots">How many of the ten slots the user can use.</param>
+/// <param name="Slots">The ID of the egg in each of the ten slots, or null when the slot is empty.</param>
+public record HatcheryGroupView(short Group, int SpeedModifier, int MaxSlots, ulong?[] Slots);
 
 /// <summary>
 ///     Defines Patreon subscription tiers that determine feature access levels.

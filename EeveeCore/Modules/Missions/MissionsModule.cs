@@ -76,67 +76,24 @@ public class MissionsModule : EeveeModule<MissionService>
 
         try
         {
-            if (await Service.GetUserCrystalSlimeAsync(userId) < storeItem.Cost)
+            if (MissionService.IsCommandOnly(storeItem))
             {
-                await ErrorAsync("Not enough crystallized slime.");
+                if (!await Service.DeductCrystalSlimeAsync(userId, storeItem.Cost))
+                {
+                    await ErrorAsync("Not enough crystallized slime.");
+                    return;
+                }
+
+                await ConfirmAsync("Good luck with your Meowth Ticket!");
+                await PlayLotteryAsync();
                 return;
             }
 
-            switch (itemKey)
-            {
-                case "friendship-stone":
-                    await Service.AddItemToInventoryAsync(userId, "friendship-stone");
-                    break;
-
-                case "credits_small":
-                    await Service.AddMewCoinsAsync(userId, storeItem.Reward);
-                    break;
-
-                case "shadow-essence":
-                    var (_, hunt) = await Service.GetUserChainAndHuntAsync(userId);
-                    if (string.IsNullOrEmpty(hunt))
-                    {
-                        await ErrorAsync("You have not set a shadow hunt yet.");
-                        return;
-                    }
-
-                    await Service.IncreaseChainAsync(userId,
-                        Random.Shared.Next(storeItem.MinChainIncrease, storeItem.MaxChainIncrease + 1));
-                    break;
-
-                case "small_chance_ticket":
-                    if (!await Service.DeductCrystalSlimeAsync(userId, storeItem.Cost))
-                    {
-                        await ErrorAsync("Not enough crystallized slime.");
-                        return;
-                    }
-
-                    await ConfirmAsync("Good luck with your Meowth Ticket!");
-                    await PlayLotteryAsync();
-                    return;
-
-                case "vip_token_single":
-                case "vip_token_pack":
-                    await Service.AddVipTokensAsync(userId, storeItem.VipTokensAmount);
-                    break;
-
-                default:
-                    await ErrorAsync("Purchase failed. Please try again later.");
-                    return;
-            }
-
-            await Service.DeductCrystalSlimeAsync(userId, storeItem.Cost);
-
-            var prefix = await GetPrefixAsync();
-            await ConfirmAsync(itemKey switch
-            {
-                "friendship-stone" => $"You bought a {storeItem.Name}! Use it with `{prefix}apply friendship-stone`.",
-                "credits_small" => $"Successfully purchased {storeItem.Name} for {storeItem.Cost} crystallized slime!",
-                "shadow-essence" => "You bought some shadow essence! Your chain has been increased!",
-                "vip_token_single" => $"Successfully purchased {storeItem.VipTokensAmount} VIP token for {storeItem.Cost} crystallized slime!",
-                "vip_token_pack" => $"Successfully purchased {storeItem.VipTokensAmount} VIP tokens for {storeItem.Cost} crystallized slime!",
-                _ => $"Successfully purchased {storeItem.Name}!"
-            });
+            var (success, message) = await Service.BuyStoreItemAsync(userId, itemKey, await GetPrefixAsync());
+            if (success)
+                await ConfirmAsync(message);
+            else
+                await ErrorAsync(message);
         }
         catch (Exception ex)
         {
@@ -420,21 +377,6 @@ public class MissionsModule : EeveeModule<MissionService>
         return result;
     }
 
-    private static int GetProgressForMission(UserProgress userProgress, string missionKey) => missionKey switch
-    {
-        "breed" => userProgress.Breed,
-        "catch" => userProgress.Catch,
-        "duel_win" => userProgress.DuelWin,
-        "duel_lose" => userProgress.DuelLose,
-        "ev" => userProgress.Ev,
-        "fish" => userProgress.Fish,
-        "npc" => userProgress.Npc,
-        "party" => userProgress.Party,
-        "pokemon_setup" => userProgress.PokemonSetup,
-        "vote" => userProgress.Vote,
-        "game_wordsearch" => userProgress.GameWordSearch,
-        "game_slots" => userProgress.GameSlots,
-        "game_slots_win" => userProgress.GameSlotsWin,
-        _ => 0
-    };
+    private static int GetProgressForMission(UserProgress userProgress, string missionKey) =>
+        MissionService.GetMissionProgress(userProgress, missionKey);
 }

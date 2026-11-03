@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Text;
 using EeveeCore.Database.Linq.Models.Pokemon;
 using LinqToDB;
@@ -413,6 +414,61 @@ public class PartyService(LinqToDbConnectionProvider dbProvider, BotLog botLog) 
     }
 
     /// <summary>
+    ///     Swaps two slots of the active party in one update. Either slot may be empty.
+    /// </summary>
+    /// <param name="userId">The user's ID.</param>
+    /// <param name="slotA">The first slot, from 1 to 6.</param>
+    /// <param name="slotB">The second slot, from 1 to 6.</param>
+    public async Task<(bool Success, string Message)> SwapPartySlots(ulong userId, int slotA, int slotB)
+    {
+        if (slotA is < 1 or > 6 || slotB is < 1 or > 6)
+            return (false, "Slot must be between 1 and 6!");
+        if (slotA == slotB)
+            return (false, "Pick two different slots.");
+
+        await using var db = await dbProvider.GetConnectionAsync();
+        var party = await db.Parties.FirstOrDefaultAsync(p => p.UserId == userId && p.IsCurrentParty);
+        if (party == null)
+            return (false, "You do not have a party yet.");
+
+        var slots = new[] { party.Slot1, party.Slot2, party.Slot3, party.Slot4, party.Slot5, party.Slot6 };
+        var a = slots[slotA - 1] is > 0 ? slots[slotA - 1] : null;
+        var b = slots[slotB - 1] is > 0 ? slots[slotB - 1] : null;
+        if (a is null && b is null)
+            return (false, "Both slots are empty.");
+
+        // The update only applies while both slots still hold what was read
+        var updated = await db.Parties
+            .Where(p => p.PartyId == party.PartyId)
+            .Where(SlotHolds(slotA, slots[slotA - 1]))
+            .Where(SlotHolds(slotB, slots[slotB - 1]))
+            .Set(SlotColumn(slotA), b)
+            .Set(SlotColumn(slotB), a)
+            .UpdateAsync();
+
+        return updated == 0
+            ? (false, "Your party changed while swapping. Please try again.")
+            : (true, $"Swapped party slots {slotA} and {slotB}.");
+    }
+
+    private static Expression<Func<Party, ulong?>> SlotColumn(int slot) => slot switch
+    {
+        1 => p => p.Slot1,
+        2 => p => p.Slot2,
+        3 => p => p.Slot3,
+        4 => p => p.Slot4,
+        5 => p => p.Slot5,
+        _ => p => p.Slot6
+    };
+
+    private static Expression<Func<Party, bool>> SlotHolds(int slot, ulong? value)
+    {
+        var column = SlotColumn(slot);
+        return Expression.Lambda<Func<Party, bool>>(
+            Expression.Equal(column.Body, Expression.Constant(value, typeof(ulong?))), column.Parameters);
+    }
+
+    /// <summary>
     ///     Removes a Pokémon from the active party.
     ///     Clears the specified slot in the user's party.
     /// </summary>
@@ -756,6 +812,37 @@ public class PartyService(LinqToDbConnectionProvider dbProvider, BotLog botLog) 
 
             return (false, "Something went wrong\nPlease try running this command again.");
         }
+    }
+
+    /// <summary>
+    ///     Empties a slot in a saved party.
+    /// </summary>
+    /// <param name="userId">The ID of the user.</param>
+    /// <param name="slot">The slot number to clear (1-6).</param>
+    /// <param name="partyName">The name of the saved party.</param>
+    /// <returns>A tuple with a success indicator and a result message.</returns>
+    public async Task<(bool Success, string Message)> ClearSavedPartySlot(ulong userId, int slot, string partyName)
+    {
+        await using var db = await dbProvider.GetConnectionAsync();
+        var query = db.Parties.Where(p => p.UserId == userId && p.Name == partyName && !p.IsCurrentParty);
+        if (!await query.AnyAsync())
+            return (false, $"You do not have a party with the name `{partyName}`.");
+
+        var updated = slot switch
+        {
+            1 => query.Set(p => p.Slot1, (ulong?)null),
+            2 => query.Set(p => p.Slot2, (ulong?)null),
+            3 => query.Set(p => p.Slot3, (ulong?)null),
+            4 => query.Set(p => p.Slot4, (ulong?)null),
+            5 => query.Set(p => p.Slot5, (ulong?)null),
+            6 => query.Set(p => p.Slot6, (ulong?)null),
+            _ => null
+        };
+        if (updated is null)
+            return (false, "Invalid slot number.");
+
+        await updated.UpdateAsync();
+        return (true, $"Cleared slot {slot} in party {partyName}");
     }
 
     /// <summary>
