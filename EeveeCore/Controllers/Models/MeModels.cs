@@ -28,6 +28,7 @@ public record PokemonCounts(int Total, int Shiny, int Radiant, int Shadow, int L
 /// <param name="DaycareLimit">How many eggs the daycare holds.</param>
 /// <param name="Counts">How many Pokémon of each kind the user owns.</param>
 /// <param name="Started">Whether the user has started.</param>
+/// <param name="StaffRank">The staff rank, such as <c>User</c> or <c>Mod</c>. Bot owners are <c>Developer</c>.</param>
 public record MeProfile(
     ulong Id,
     string? TrainerNickname,
@@ -43,7 +44,15 @@ public record MeProfile(
     int Chain,
     int DaycareLimit,
     PokemonCounts Counts,
-    bool Started);
+    bool Started,
+    string StaffRank);
+
+/// <summary>
+///     The user's staff standing.
+/// </summary>
+/// <param name="StaffRank">The staff rank, such as <c>User</c> or <c>Mod</c>. Bot owners are <c>Developer</c>.</param>
+/// <param name="BotOwner">Whether the user is a bot owner.</param>
+public record StaffInfo(string StaffRank, bool BotOwner);
 
 /// <summary>
 ///     An item and how many the user has.

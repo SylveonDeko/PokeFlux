@@ -141,6 +141,11 @@ public class DittoDataConnection : DataConnection
     public ITable<BotBan> BotBans => this.GetTable<BotBan>();
 
     /// <summary>
+    ///     Represents staff actions taken through the dashboard
+    /// </summary>
+    public ITable<StaffAuditEntry> StaffAuditLog => this.GetTable<StaffAuditEntry>();
+
+    /// <summary>
     ///     Represents calendar events
     /// </summary>
     public ITable<Cal> Calendar => this.GetTable<Cal>();

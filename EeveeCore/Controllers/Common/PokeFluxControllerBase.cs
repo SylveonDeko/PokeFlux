@@ -57,6 +57,11 @@ public abstract class PokeFluxUserControllerBase : PokeFluxControllerBase
     ///     Gets the Fluxer id of the user, taken from the verified token's <c>sub</c> claim.
     /// </summary>
     protected ulong UserId => (ulong)HttpContext.Items[DashUserAttribute.UserIdKey]!;
+
+    /// <summary>
+    ///     Gets the Fluxer username from the verified token, or null when it has none.
+    /// </summary>
+    protected string? UserName => HttpContext.Items[DashUserAttribute.UserNameKey] as string;
 }
 
 /// <summary>

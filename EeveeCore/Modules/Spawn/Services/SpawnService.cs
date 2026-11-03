@@ -1042,6 +1042,11 @@ public class SpawnService : INService, IReadyExecutor
     }
 
     /// <summary>
+    ///     Whether spawn storm mode is on, spawning a Pokémon on every message.
+    /// </summary>
+    public bool AlwaysSpawn => _alwaysSpawn;
+
+    /// <summary>
     ///     Gets a random Pokemon of a specific type.
     ///     Used for spawning Pokemon affected by honey or special events.
     /// </summary>

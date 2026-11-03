@@ -87,7 +87,10 @@ public class GiftService : INService
             .UpdateAsync();
 
         // Log the transaction
-        await LogGiftTransactionAsync(giverId, receiverId, amount.ToString(), "gift_credits");
+        await LogGiftTransactionAsync(new TradeLog
+        {
+            Command = "gift_credits", SenderId = giverId, ReceiverId = receiverId, SenderCredits = (long)amount
+        });
 
         // Send log message
         await SendLogMessageAsync($"💰 **Credits Gift**\n" +
@@ -157,7 +160,10 @@ public class GiftService : INService
             .UpdateAsync();
 
         // Log the transaction
-        await LogGiftTransactionAsync(giverId, receiverId, amount.ToString(), "gift_redeems");
+        await LogGiftTransactionAsync(new TradeLog
+        {
+            Command = "gift_redeems", SenderId = giverId, ReceiverId = receiverId, SenderRedeems = (ulong)amount
+        });
 
         // Send log message
         await SendLogMessageAsync($"🎫 **Redeems Gift**\n" +
@@ -255,7 +261,10 @@ public class GiftService : INService
             .UpdateAsync();
 
         // Log the transaction
-        await LogGiftTransactionAsync(giverId, receiverId, pokemon.Id.ToString(), "gift_pokemon");
+        await LogGiftTransactionAsync(new TradeLog
+        {
+            Command = "gift_pokemon", SenderId = giverId, ReceiverId = receiverId, SenderPokemon = [pokemon.Id]
+        });
 
         // Send log message
         await SendLogMessageAsync($"🎁 **Pokemon Gift**\n" +
@@ -334,7 +343,11 @@ public class GiftService : INService
             .UpdateAsync();
 
         // Log the transaction
-        await LogGiftTransactionAsync(giverId, receiverId, amount.ToString(), "gift_tokens");
+        await LogGiftTransactionAsync(new TradeLog
+        {
+            Command = "gift_tokens", SenderId = giverId, ReceiverId = receiverId,
+            SenderTokens = JsonSerializer.Serialize(new Dictionary<string, int> { [tokenTypeName] = amount })
+        });
 
         // Send log message
         await SendLogMessageAsync($"{tokenType.GetEmoji()} **{tokenTypeName} Tokens Gift**\n" +
@@ -396,26 +409,17 @@ public class GiftService : INService
         };
     }
 
-    private async Task LogGiftTransactionAsync(ulong senderId, ulong receiverId, string amount, string command)
+    private async Task LogGiftTransactionAsync(TradeLog tradeLog)
     {
         try
         {
             await using var db = await _dbProvider.GetConnectionAsync();
-            
-            var tradeLog = new TradeLog
-            {
-                SenderId = senderId,
-                ReceiverId = receiverId,
-                SenderRedeems = 0,
-                Command = command,
-                Time = DateTime.UtcNow
-            };
-
+            tradeLog.Time = DateTime.UtcNow;
             await db.InsertAsync(tradeLog);
         }
-        catch
+        catch (Exception ex)
         {
-            // Logging errors are not critical
+            Serilog.Log.Warning(ex, "Failed to write {Command} log", tradeLog.Command);
         }
     }
 

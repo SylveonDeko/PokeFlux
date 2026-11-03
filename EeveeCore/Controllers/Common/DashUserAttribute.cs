@@ -16,6 +16,11 @@ public sealed class DashUserAttribute : Attribute, IAsyncAuthorizationFilter
     /// </summary>
     public const string UserIdKey = "PokeFluxUserId";
 
+    /// <summary>
+    ///     The <see cref="HttpContext.Items" /> key the token's username is stored under.
+    /// </summary>
+    public const string UserNameKey = "PokeFluxUserName";
+
     /// <inheritdoc />
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
@@ -33,5 +38,6 @@ public sealed class DashUserAttribute : Attribute, IAsyncAuthorizationFilter
         }
 
         context.HttpContext.Items[UserIdKey] = userId;
+        context.HttpContext.Items[UserNameKey] = principal.FindFirst(DashJwtConstants.UserNameClaim)?.Value;
     }
 }

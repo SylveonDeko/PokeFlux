@@ -13,6 +13,7 @@ public class TradeLog
     ///     Gets or sets the unique identifier for this trade.
     /// </summary>
     [PrimaryKey]
+    [Identity]
     [Column("t_id")]
     public int TradeId { get; set; }
 
@@ -67,6 +68,12 @@ public class TradeLog
     [NotNull]
     public ulong SenderRedeems { get; set; }
 
+    /// <summary>
+    ///     Gets or sets the type tokens the sender gave, as a JSON map of type name to count.
+    /// </summary>
+    [Column("sender_tokens", DbType = "jsonb")]
+    public string? SenderTokens { get; set; }
+
     #endregion
 
     #region Receiver
@@ -106,6 +113,12 @@ public class TradeLog
     [Column("receiver_redeems")]
     [NotNull]
     public ulong ReceiverRedeems { get; set; }
+
+    /// <summary>
+    ///     Gets or sets the type tokens the receiver gave, as a JSON map of type name to count.
+    /// </summary>
+    [Column("receiver_tokens", DbType = "jsonb")]
+    public string? ReceiverTokens { get; set; }
 
     #endregion
 }

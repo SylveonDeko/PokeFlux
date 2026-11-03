@@ -26,13 +26,22 @@ namespace EeveeCore.Controllers;
 /// <param name="achievementService">Achievements and loyalty.</param>
 /// <param name="missionService">Missions, mission XP and slime.</param>
 /// <param name="mongo">The game data, for item categories.</param>
+/// <param name="staffRanks">Staff ranks, with bot owners at the top.</param>
 [Route("api/me")]
 public class MeController(
     LinqToDbConnectionProvider dbProvider,
     AchievementService achievementService,
     MissionService missionService,
-    IMongoService mongo) : PokeFluxUserControllerBase
+    IMongoService mongo,
+    StaffRankService staffRanks) : PokeFluxUserControllerBase
 {
+    /// <summary>
+    ///     Gets the user's staff rank, which works before they have started.
+    /// </summary>
+    [HttpGet("staff")]
+    public async Task<IActionResult> Staff() =>
+        Ok(new StaffInfo((await staffRanks.GetRankAsync(UserId)).ToString(), staffRanks.IsOwner(UserId)));
+
     /// <summary>
     ///     Gets the user's trainer profile.
     /// </summary>
@@ -70,7 +79,8 @@ public class MeController(
             user.Chain,
             user.DaycareLimit ?? 1,
             counts,
-            true));
+            true,
+            (await staffRanks.GetRankAsync(UserId)).ToString()));
     }
 
     /// <summary>

@@ -1,6 +1,5 @@
 using EeveeCore.Common.Enums;
 using EeveeCore.Modules.Trade.Services;
-using LinqToDB.Async;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EeveeCore.Modules.Trade;
@@ -16,23 +15,8 @@ public sealed class RequireStaffRankAttribute(StaffRank requiredRank) : Precondi
     public override async Task<PreconditionResult> CheckPermissionsAsync(ICommandContext context,
         CommandInfo command, IServiceProvider services)
     {
-        var creds = services.GetRequiredService<BotCredentials>();
-        if (creds.IsOwner(context.User))
-            return PreconditionResult.FromSuccess();
-
-        var dbProvider = services.GetRequiredService<LinqToDbConnectionProvider>();
-        await using var db = await dbProvider.GetConnectionAsync();
-        var user = await db.Users.FirstOrDefaultAsync(u => u.UserId == context.User.Id);
-
-        if (user == null)
-            return PreconditionResult.FromError("User not found in database");
-
-        if (!Enum.TryParse<StaffRank>(user.Staff, true, out var userRank))
-            return PreconditionResult.FromError("Invalid staff rank");
-
-        return userRank >= requiredRank
-            ? PreconditionResult.FromSuccess()
-            : PreconditionResult.FromError($"Insufficient permissions. Required: {requiredRank}");
+        var error = await services.GetRequiredService<StaffRankService>().CheckAsync(context.User.Id, requiredRank);
+        return error is null ? PreconditionResult.FromSuccess() : PreconditionResult.FromError(error);
     }
 }
 

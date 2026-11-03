@@ -1037,6 +1037,28 @@ public class TradeService : INService
     {
         try
         {
+            await using var db = await _context.GetConnectionAsync();
+            await db.InsertAsync(new Database.Linq.Models.Game.TradeLog
+            {
+                Command = "trade",
+                Time = DateTime.UtcNow,
+                SenderId = session.Player1Id,
+                SenderPokemon = PokemonIdsBy(session, session.Player1Id),
+                SenderCredits = (long)session.GetCreditsBy(session.Player1Id),
+                SenderTokens = TokensJson(session, session.Player1Id),
+                ReceiverId = session.Player2Id,
+                ReceiverPokemon = PokemonIdsBy(session, session.Player2Id),
+                ReceiverCredits = (long)session.GetCreditsBy(session.Player2Id),
+                ReceiverTokens = TokensJson(session, session.Player2Id)
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to write trade log for session {SessionId}", session.SessionId);
+        }
+
+        try
+        {
             var summary = await GenerateTradeSummaryAsync(session);
             var logMessage = $"🔄 **Trade Completed**\n" +
                             $"**Session ID**: `{session.SessionId}`\n" +
@@ -1050,6 +1072,19 @@ public class TradeService : INService
         {
             // Logging errors are not critical
         }
+    }
+
+    private static ulong[] PokemonIdsBy(TradeSession session, ulong userId)
+    {
+        return session.GetPokemonBy(userId).Where(e => e.PokemonId.HasValue).Select(e => e.PokemonId!.Value).ToArray();
+    }
+
+    private static string? TokensJson(TradeSession session, ulong userId)
+    {
+        var tokens = session.GetTokensBy(userId);
+        return tokens.Count == 0
+            ? null
+            : JsonSerializer.Serialize(tokens.ToDictionary(t => t.Key.GetDisplayName(), t => t.Value));
     }
 
     private async Task AppendUserOfferingsAsync(StringBuilder summary, TradeSession session, ulong userId)

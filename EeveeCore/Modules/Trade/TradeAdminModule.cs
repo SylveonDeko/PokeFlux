@@ -1,18 +1,16 @@
 using EeveeCore.Common.Enums;
 using EeveeCore.Common.ModuleBases;
 using EeveeCore.Database.Linq.Models.Game;
-using LinqToDB;
-using LinqToDB.Async;
+using EeveeCore.Modules.Trade.Services;
 
 namespace EeveeCore.Modules.Trade;
 
 /// <summary>
 ///     Staff commands for trade fraud detection and trade bans.
 /// </summary>
-/// <param name="context">The database connection provider.</param>
 [Name("Trade Admin")]
 [Group("tradeadmin")]
-public class TradeAdminModule(LinqToDbConnectionProvider context) : EeveeModule
+public class TradeAdminModule : EeveeModule<TradeAdminService>
 {
     /// <summary>
     ///     Shows recent high-risk trade detections.
@@ -23,26 +21,7 @@ public class TradeAdminModule(LinqToDbConnectionProvider context) : EeveeModule
     [RequireStaffRank(StaffRank.Mod)]
     public async Task Recent(int hours = 24)
     {
-        var cutoffTime = DateTime.UtcNow.AddHours(-hours);
-
-        await using var db = await context.GetConnectionAsync();
-
-        var detections = await db.TradeFraudDetections
-            .Where(d => d.DetectionTimestamp >= cutoffTime && d.RiskScore >= 0.4)
-            .OrderByDescending(d => d.RiskScore)
-            .Take(10)
-            .Select(d => new
-            {
-                d.Id,
-                d.PrimaryUserId,
-                d.SecondaryUserId,
-                d.RiskScore,
-                d.FraudType,
-                d.InvestigationStatus,
-                d.DetectionTimestamp,
-                d.TradeBlocked
-            })
-            .ToListAsync();
+        var (detections, _) = await Service.GetRecentDetectionsAsync(hours, 0, 10);
 
         if (!detections.Any())
         {
@@ -86,11 +65,7 @@ public class TradeAdminModule(LinqToDbConnectionProvider context) : EeveeModule
     [RequireStaffRank(StaffRank.Investigator)]
     public async Task Investigate(int detectionId)
     {
-        await using var db = await context.GetConnectionAsync();
-
-        var detection = await db.TradeFraudDetections
-            .LoadWithAsTable(d => d.SuspiciousTradeAnalytics)
-            .FirstOrDefaultAsync(d => d.Id == detectionId);
+        var detection = await Service.GetDetectionAsync(detectionId);
 
         if (detection == null)
         {
@@ -152,12 +127,8 @@ public class TradeAdminModule(LinqToDbConnectionProvider context) : EeveeModule
     [RequireStaffRank(StaffRank.Mod)]
     public async Task Relationship(IUser user1, IUser user2)
     {
-        var (lowerId, higherId) = user1.Id < user2.Id ? (user1.Id, user2.Id) : (user2.Id, user1.Id);
-
-        await using var db = await context.GetConnectionAsync();
-
-        var relationship = await db.UserTradeRelationships
-            .FirstOrDefaultAsync(r => r.User1Id == lowerId && r.User2Id == higherId);
+        var lowerId = Math.Min(user1.Id, user2.Id);
+        var relationship = await Service.GetRelationshipAsync(user1.Id, user2.Id);
 
         if (relationship == null)
         {
@@ -211,27 +182,11 @@ public class TradeAdminModule(LinqToDbConnectionProvider context) : EeveeModule
     [RequireStaffRank(StaffRank.Admin)]
     public async Task Whitelist(IUser user1, IUser user2)
     {
-        var (lowerId, higherId) = user1.Id < user2.Id ? (user1.Id, user2.Id) : (user2.Id, user1.Id);
-
-        await using var db = await context.GetConnectionAsync();
-
-        var relationship = await db.UserTradeRelationships
-            .FirstOrDefaultAsync(r => r.User1Id == lowerId && r.User2Id == higherId);
-
-        if (relationship == null)
+        if (!await Service.WhitelistAsync(user1.Id, user2.Id, ctx.User.Username))
         {
             await SendStaffAsync($"No trade relationship found between {user1.Mention} and {user2.Mention}. They must trade at least once first.");
             return;
         }
-
-        await db.UserTradeRelationships
-            .Where(r => r.User1Id == lowerId && r.User2Id == higherId)
-            .Set(r => r.Whitelisted, true)
-            .Set(r => r.AdminReviewed, true)
-            .Set(r => r.AdminVerdict, true)
-            .Set(r => r.AdminNotes, $"Whitelisted by {ctx.User.Username} on {DateTime.UtcNow:yyyy-MM-dd}")
-            .Set(r => r.LastUpdated, DateTime.UtcNow)
-            .UpdateAsync();
 
         await SendStaffAsync($"✅ Trade relationship between {user1.Mention} and {user2.Mention} has been whitelisted. Future trades will bypass fraud detection.");
     }
@@ -245,27 +200,9 @@ public class TradeAdminModule(LinqToDbConnectionProvider context) : EeveeModule
     [RequireStaffRank(StaffRank.Mod)]
     public async Task Stats(int days = 7)
     {
-        var cutoffTime = DateTime.UtcNow.AddDays(-days);
+        var stats = await Service.GetStatsAsync(days);
 
-        await using var db = await context.GetConnectionAsync();
-
-        var stats = await db.TradeFraudDetections
-            .Where(d => d.DetectionTimestamp >= cutoffTime)
-            .GroupBy(d => 1)
-            .Select(g => new
-            {
-                TotalDetections = g.Count(),
-                BlockedTrades = g.Count(d => d.TradeBlocked),
-                HighRisk = g.Count(d => d.RiskScore >= 0.6),
-                MediumRisk = g.Count(d => d.RiskScore >= 0.4 && d.RiskScore < 0.6),
-                LowRisk = g.Count(d => d.RiskScore < 0.4),
-                AltAccountFlags = g.Count(d => d.FraudType == FraudType.AltAccountTrading),
-                RmtFlags = g.Count(d => d.FraudType == FraudType.RealMoneyTrading),
-                NewbieExploitFlags = g.Count(d => d.FraudType == FraudType.NewbieExploitation)
-            })
-            .FirstOrDefaultAsync();
-
-        if (stats == null || stats.TotalDetections == 0)
+        if (stats.TotalDetections == 0)
         {
             await SendStaffAsync($"No fraud detections found in the last {days} days.");
             return;
@@ -304,43 +241,21 @@ public class TradeAdminModule(LinqToDbConnectionProvider context) : EeveeModule
     [RequireStaffRank(StaffRank.Admin)]
     public async Task DetradeBan(IUser user, [Remainder] string reason = "Admin discretion")
     {
-        await using var db = await context.GetConnectionAsync();
-
-        var userData = await db.Users.FirstOrDefaultAsync(u => u.UserId == user.Id);
-
-        if (userData == null)
+        var result = await Service.RemoveTradeBanAsync(user.Id, reason, ctx.User.Id);
+        switch (result.Outcome)
         {
-            await SendStaffAsync($"User {user.Mention} not found in the database.");
-            return;
+            case DetradeBanOutcome.NotFound:
+                await SendStaffAsync($"User {user.Mention} not found in the database.");
+                return;
+            case DetradeBanOutcome.NotBanned:
+                await SendStaffAsync($"User {user.Mention} is not currently trade banned.");
+                return;
+            case DetradeBanOutcome.Failed:
+                await SendStaffAsync($"Failed to remove trade ban for {user.Mention}. Please try again.");
+                return;
         }
 
-        if (userData.TradeBanned != true && userData.MarketBanned != true)
-        {
-            await SendStaffAsync($"User {user.Mention} is not currently trade banned.");
-            return;
-        }
-
-        var banHistory = $"Previous ban: {userData.TradeBanReason ?? userData.MarketBanReason} " +
-                         $"(banned on {userData.TradeBanDate ?? userData.MarketBanDate:yyyy-MM-dd})";
-
-        var updated = await db.Users
-            .Where(u => u.UserId == user.Id)
-            .Set(u => u.TradeBanned, false)
-            .Set(u => u.TradeBanReason, "")
-            .Set(u => u.TradeBanDate, DateTime.Now)
-            .Set(u => u.MarketBanned, false)
-            .Set(u => u.MarketBanReason, "")
-            .Set(u => u.MarketBanDate, DateTime.Now)
-            .UpdateAsync();
-
-        if (updated == 0)
-        {
-            await SendStaffAsync($"Failed to remove trade ban for {user.Mention}. Please try again.");
-            return;
-        }
-
-        Serilog.Log.Warning("🔓 Trade ban removed by admin: User={UserId} ({Username}), Admin={AdminId} ({AdminUsername}), Reason={Reason}, PreviousBan={PreviousBan}",
-            user.Id, user.Username, ctx.User.Id, ctx.User.Username, reason, banHistory);
+        var banHistory = result.PreviousBan!;
 
         await SendStaffAsync(new EmbedBuilder()
             .WithTitle("✅ Trade Ban Removed")
@@ -383,48 +298,11 @@ public class TradeAdminModule(LinqToDbConnectionProvider context) : EeveeModule
 
     private async Task ApplyTradeBanAsync(IUser user, string reason, bool marketBan)
     {
-        await using var db = await context.GetConnectionAsync();
-
-        var userData = await db.Users.FirstOrDefaultAsync(u => u.UserId == user.Id);
-
-        var banDate = DateTime.UtcNow;
-        int updated;
-
-        if (userData == null)
-        {
-            await db.InsertAsync(new Database.Linq.Models.Bot.User
-            {
-                UserId = user.Id,
-                TradeBanned = true,
-                TradeBanReason = reason,
-                TradeBanDate = banDate,
-                MarketBanned = marketBan,
-                MarketBanReason = marketBan ? reason : null,
-                MarketBanDate = marketBan ? banDate : null
-            });
-            updated = 1;
-        }
-        else
-        {
-            updated = await db.Users
-                .Where(u => u.UserId == user.Id)
-                .Set(u => u.TradeBanned, true)
-                .Set(u => u.TradeBanReason, reason)
-                .Set(u => u.TradeBanDate, banDate)
-                .Set(u => u.MarketBanned, marketBan)
-                .Set(u => u.MarketBanReason, marketBan ? reason : userData.MarketBanReason)
-                .Set(u => u.MarketBanDate, marketBan ? banDate : userData.MarketBanDate)
-                .UpdateAsync();
-        }
-
-        if (updated == 0)
+        if (!await Service.TradeBanAsync(user.Id, reason, marketBan, ctx.User.Id))
         {
             await SendStaffAsync($"Failed to apply trade ban to {user.Mention}. Please try again.");
             return;
         }
-
-        Serilog.Log.Warning("🔨 Trade ban applied by admin: User={UserId} ({Username}), Admin={AdminId} ({AdminUsername}), Reason={Reason}, MarketBan={MarketBan}",
-            user.Id, user.Username, ctx.User.Id, ctx.User.Username, reason, marketBan);
 
         await SendStaffAsync(new EmbedBuilder()
             .WithTitle("🔨 Trade Ban Applied")
