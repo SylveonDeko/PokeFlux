@@ -65,7 +65,7 @@ public class StartModule(BotLog botLog) : EeveeModule<StartService>
                              $"See your Pokémon with `{prefix}pokemon`\n" +
                              $"Select your starter with `{prefix}select 1`\n" +
                              "**Now begin your adventure!**\n\n" +
-                             "**Spawns are off by default.** If you are setting the bot up in a new server, " +
+                             "**Spawns are off by default.** If you are setting the bot up in a new community," +
                              $"use `{prefix}spawn enable` in each channel you want Pokémon to spawn in.")
             .AddField("How to get Redeems and Credits",
                 "Get 1 Redeem and 15,000 Credits for 5 Upvote Points!\n" +

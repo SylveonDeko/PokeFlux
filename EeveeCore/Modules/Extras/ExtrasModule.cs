@@ -626,7 +626,7 @@ public class ExtrasModule(
         ///     Displays active honey in the current server.
         /// </summary>
         [Command("server")]
-        [Summary("Server Honey Stats.")]
+        [Summary("Community Honey Stats.")]
         public async Task SpreadServer()
         {
             await using var db = await dbContextProvider.GetConnectionAsync();
@@ -651,9 +651,9 @@ public class ExtrasModule(
             }
 
             var embed = new EmbedBuilder()
-                .WithTitle("Server Stats")
+                .WithTitle("Community Stats")
                 .WithColor(0xFFBC61u)
-                .WithDescription(desc.Length == 0 ? "There is no honey active in this server." : desc.ToString());
+                .WithDescription(desc.Length == 0 ? "There is no honey active in this community." : desc.ToString());
 
             await SendAsync(embed: embed);
         }

@@ -66,7 +66,7 @@ public class SpawnModule(BotCredentials credentials) : EeveeModule<SpawnService>
     ///     Shows the spawn configuration of this server, for troubleshooting.
     /// </summary>
     [Command("debug")]
-    [Summary("Debug spawn issues in this server.")]
+    [Summary("Debug spawn issues in this community.")]
     public async Task DebugSpawn()
     {
         if (!credentials.OwnerIds.Contains(ctx.User.Id))
@@ -142,7 +142,7 @@ public class SpawnModule(BotCredentials credentials) : EeveeModule<SpawnService>
         channel ??= ctx.Channel;
         if (channel.GuildId != ctx.Guild!.Id)
         {
-            await ErrorAsync("That channel is not in this server.");
+            await ErrorAsync("That channel is not in this community.");
             return;
         }
 
@@ -162,7 +162,7 @@ public class SpawnModule(BotCredentials credentials) : EeveeModule<SpawnService>
     {
         if (channel.GuildId != ctx.Guild!.Id)
         {
-            await ErrorAsync("That channel is not in this server.");
+            await ErrorAsync("That channel is not in this community.");
             return;
         }
 
@@ -214,7 +214,7 @@ public class SpawnModule(BotCredentials credentials) : EeveeModule<SpawnService>
         channel ??= ctx.Channel;
         if (channel.GuildId != ctx.Guild!.Id)
         {
-            await ErrorAsync("That channel is not in this server.");
+            await ErrorAsync("That channel is not in this community.");
             return;
         }
 

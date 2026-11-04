@@ -241,7 +241,7 @@ public class GamesModule(SlotMachineService slotMachineService, MissionService m
                 "• Pay attention to game instructions\n" +
                 "• Don't be afraid to try different strategies")
             .AddField("🆘 **Need More Help?**",
-                "• Join our support server\n" +
+                "• Join our support community\n" +
                 "• Ask questions in community channels\n" +
                 "• Check out the full guide online\n" +
                 "• Contact staff for technical issues")

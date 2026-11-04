@@ -5,14 +5,14 @@ namespace EeveeCore.Modules.Server;
 /// <summary>
 ///     Server settings for the bot itself.
 /// </summary>
-[Name("Server")]
+[Name("Community")]
 public class ServerModule : EeveeModule
 {
     /// <summary>
     ///     Shows the prefix in this server.
     /// </summary>
     [Command("prefix")]
-    [Summary("See the prefix in this server.")]
+    [Summary("See the prefix in this community.")]
     public async Task Prefix() => await ConfirmAsync($"The prefix here is `{await GetPrefixAsync()}`.");
 
     /// <summary>
@@ -20,7 +20,7 @@ public class ServerModule : EeveeModule
     /// </summary>
     /// <param name="prefix">The new prefix.</param>
     [Command("prefix")]
-    [Summary("Change the prefix in this server.")]
+    [Summary("Change the prefix in this community.")]
     [RequireUserPermission(GuildPermission.ManageGuild)]
     public async Task Prefix(string prefix)
     {

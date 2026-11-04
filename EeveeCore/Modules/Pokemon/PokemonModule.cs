@@ -36,7 +36,7 @@ public partial class PokemonModule : EeveeModule<PokemonService>
 
     private static readonly string[] Footers =
     [
-        "We are always looking for new help! Art Team, Staff Team, and Dev team-ask in the official server!"
+        "We are always looking for new help! Art Team, Staff Team, and Dev team-ask in the official community!"
     ];
 
     private readonly Random random = new();

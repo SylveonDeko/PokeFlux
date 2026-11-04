@@ -117,7 +117,7 @@ public class EeveeCore
             .WithTitle($"Joined {guild.Name} {guild.Id}")
             .AddField("Members", guild.MemberCount)
             .AddField("Owner", guild.OwnerId)
-            .AddField("Total servers", Client.Gateway.Guilds.Count)
+            .AddField("Total communities", Client.Gateway.Guilds.Count)
             .WithThumbnailUrl(guild.GetIconUrl())
             .WithOkColor());
     }
@@ -126,8 +126,8 @@ public class EeveeCore
     {
         Log.Information("Left server: {Name} [{Id}]", guild.Name, guild.Id);
         await SendGuildLogAsync(new EmbedBuilder()
-            .WithTitle($"Left server: {guild.Name} [{guild.Id}]")
-            .AddField("Total servers", Client.Gateway.Guilds.Count)
+            .WithTitle($"Left community: {guild.Name} [{guild.Id}]")
+            .AddField("Total communities", Client.Gateway.Guilds.Count)
             .WithErrorColor());
     }
 

@@ -45,7 +45,7 @@ public class AdminSpawnController(FluxerClient client, SpawnService spawnService
     public async Task<IActionResult> Debug(ulong guildId)
     {
         if (client.Gateway.GetGuild(guildId) is not { } guild)
-            return Error(404, "PokeFlux is not in that server.");
+            return Error(404, "PokeFlux is not in that community.");
 
         var info = await spawnService.GetSpawnDebugInfo(guild);
         return Ok(new AdminSpawnDebug(info.Split('\n').ToList()));

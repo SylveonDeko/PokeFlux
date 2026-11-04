@@ -104,7 +104,7 @@ public class GuildsController(
         var textChannels = TextChannels(guild).Select(c => c.Id).ToHashSet();
         var channels = new[] { request.EnabledChannels, request.DisabledChannels, request.Redirects };
         if (channels.Any(list => list?.Any(id => !textChannels.Contains(id)) == true))
-            return Error(400, "That channel is not a text channel in this server.");
+            return Error(400, "That channel is not a text channel in this community.");
 
         await spawnService.UpdateSpawnSettings(guildId, new SpawnSettingsUpdate(
             request.EnableSpawnsAll,
@@ -123,11 +123,11 @@ public class GuildsController(
     private async Task<(SocketGuild? Guild, IActionResult? Error)> GetManagedGuildAsync(ulong guildId)
     {
         if (client.Gateway.GetGuild(guildId) is not { } guild)
-            return (null, Error(404, "PokeFlux is not in that server."));
+            return (null, Error(404, "PokeFlux is not in that community."));
 
         return await CanManageAsync(guild)
             ? (guild, null)
-            : (null, Error(403, "You need Manage Server in that server."));
+            : (null, Error(403, "You need Manage Community in that community."));
     }
 
     private async Task<bool> CanManageAsync(SocketGuild guild, bool requireMember = false)

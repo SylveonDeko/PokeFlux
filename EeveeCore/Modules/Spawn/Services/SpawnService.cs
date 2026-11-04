@@ -1240,7 +1240,7 @@ public class SpawnService : INService, IReadyExecutor
 
         if (config == null)
         {
-            debugMessages.Add("No guild configuration found.");
+            debugMessages.Add("No community configuration found.");
             return string.Join("\n", debugMessages);
         }
 
