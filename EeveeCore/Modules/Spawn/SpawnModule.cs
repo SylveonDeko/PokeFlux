@@ -15,6 +15,7 @@ public class CatchModule : EeveeModule<SpawnService>
     /// </summary>
     /// <param name="name">The Pokémon's name.</param>
     [Command("catch")]
+    [Alias("c")]
     [Summary("Catch the Pokémon that spawned in this channel.")]
     [RequireContext(ContextType.Guild)]
     public async Task Catch([Remainder] string name)
